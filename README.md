@@ -1,10 +1,10 @@
-# agent-lens
+# point-n-tell-ui
 
 A CLI that lets an AI coding agent inspect UI bugs through annotated captures of a live page.
 
 ## What it does
 
-An agent starts `agent-lens`, which opens a CDP-controlled Chrome session with a persistent profile. The user annotates the page; Agent Lens returns screenshots and structured browser context for the agent to investigate.
+An agent starts `pnt-ui`, which opens a CDP-controlled Chrome session with a persistent profile. The user annotates the page; Agent Lens returns screenshots and structured browser context for the agent to investigate.
 
 ## Core workflow
 
