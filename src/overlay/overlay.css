@@ -1,1 +1,92 @@
 @import "tailwindcss";
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+}
+
+:host {
+  --radius: 0.7rem;
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.22 0.025 255);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.22 0.025 255);
+  --primary: oklch(0.47 0.09 174);
+  --primary-foreground: oklch(0.99 0 0);
+  --secondary: oklch(0.96 0.01 170);
+  --secondary-foreground: oklch(0.3 0.035 174);
+  --muted: oklch(0.97 0.008 250);
+  --muted-foreground: oklch(0.54 0.025 250);
+  --accent: oklch(0.96 0.01 170);
+  --accent-foreground: oklch(0.3 0.035 174);
+  --destructive: oklch(0.58 0.22 27);
+  --border: oklch(0.91 0.012 250);
+  --input: oklch(0.91 0.012 250);
+  --ring: oklch(0.63 0.07 174);
+}
+
+.pnt-toolbar-anchor {
+  position: fixed;
+  z-index: 2147483647;
+  top: 8px;
+  right: 0;
+  left: 0;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.pnt-toolbar {
+  width: max-content;
+  max-width: calc(100vw - 16px);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--card);
+  box-shadow: 0 2px 12px rgb(15 23 42 / 12%);
+  pointer-events: auto;
+}
+
+.pnt-toolbar-content {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  overflow-x: auto;
+  padding: 6px 8px;
+  scrollbar-width: none;
+}
+
+.pnt-toolbar-content::-webkit-scrollbar {
+  display: none;
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+}

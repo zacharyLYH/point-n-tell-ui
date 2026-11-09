@@ -1,5 +1,12 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { PRESETS, type SessionState, type ViewportSpec } from './types.js';
+import {
+  PRESETS,
+  type Coordinates,
+  type Point,
+  type Selection,
+  type SessionState,
+  type ViewportSpec,
+} from './types.js';
 
 function send(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { 'content-type': 'application/json' });
@@ -43,9 +50,42 @@ export function parseViewport(value: unknown): ViewportSpec {
   return { preset: preset as ViewportSpec['preset'], width: w, height: h };
 }
 
+function parseSelection(value: unknown): Pick<Selection, 'comment' | 'coordinates'> {
+  if (!value || typeof value !== 'object') {
+    throw new Error('Invalid selection');
+  }
+  const { comment, coordinates } = value as Record<string, unknown>;
+  if (typeof comment !== 'string' || !comment.trim() || comment.length > 5000) {
+    throw new Error('Comment must contain 1–5000 characters');
+  }
+  if (!Array.isArray(coordinates) || coordinates.length !== 4) {
+    throw new Error('Selection must have four rectangle corners');
+  }
+  const points = coordinates.map((point): Point => {
+    if (!point || typeof point !== 'object') {
+      throw new Error('Invalid selection coordinate');
+    }
+    const { x, y } = point as Record<string, unknown>;
+    if (typeof x !== 'number' || typeof y !== 'number' || !Number.isFinite(x) || !Number.isFinite(y)) {
+      throw new Error('Selection coordinates must be finite numbers');
+    }
+    return { x, y };
+  }) as Coordinates;
+  const [topLeft, topRight, bottomRight, bottomLeft] = points;
+  if (
+    topRight.x <= topLeft.x || bottomLeft.y <= topLeft.y ||
+    topLeft.y !== topRight.y || topRight.x !== bottomRight.x ||
+    bottomRight.y !== bottomLeft.y || bottomLeft.x !== topLeft.x
+  ) {
+    throw new Error('Selection coordinates must describe a non-empty rectangle');
+  }
+  return { comment: comment.trim(), coordinates: points };
+}
+
 export async function startServer(
   getState: () => SessionState,
   applyViewport: (viewport: ViewportSpec) => Promise<void>,
+  saveSelection: (selection: Pick<Selection, 'comment' | 'coordinates'>) => Promise<SessionState>,
 ): Promise<{ url: string; close: () => Promise<void> }> {
   const server = createServer(async (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -68,6 +108,11 @@ export async function startServer(
         const viewport = parseViewport(JSON.parse(await readBody(req)));
         await applyViewport(viewport);
         send(res, 200, getState());
+        return;
+      }
+
+      if (req.method === 'POST' && req.url === '/selection') {
+        send(res, 200, await saveSelection(parseSelection(JSON.parse(await readBody(req)))));
         return;
       }
 

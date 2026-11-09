@@ -20,8 +20,23 @@ export type SessionContext = {
   sessionRef: string;
 };
 
+export type Point = { x: number; y: number };
+export type Coordinates = [Point, Point, Point, Point];
+
+export type Selection = {
+  selectionId: string;
+  comment: string;
+  coordinates: Coordinates;
+  viewport: ViewportSpec;
+  scroll: { x: number; y: number };
+  page: { url: string };
+  createdAt: string;
+  imagePath: string;
+};
+
 export type SessionState = {
   session: SessionContext;
   viewport: ViewportSpec;
   presets: typeof PRESETS;
+  selections: Selection[];
 };

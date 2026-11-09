@@ -9,10 +9,20 @@ declare global {
   }
 }
 
+const config = window.__PNT_CONFIG__;
+delete window.__PNT_CONFIG__;
+
 if (window.top === window && !window.__PNT_OVERLAY__) {
   window.__PNT_OVERLAY__ = true;
 
   const mount = () => {
+    if (!document.getElementById('pnt-toolbar-safe-area')) {
+      const safeArea = document.createElement('style');
+      safeArea.id = 'pnt-toolbar-safe-area';
+      safeArea.textContent = 'body { padding-top: 64px !important; }';
+      document.documentElement.append(safeArea);
+    }
+
     const host = document.createElement('div');
     host.id = 'pnt-ui-root';
     host.style.cssText =
@@ -27,7 +37,7 @@ if (window.top === window && !window.__PNT_OVERLAY__) {
     document.documentElement.append(host);
 
     createRoot(root).render(
-      <Overlay apiUrl={window.__PNT_CONFIG__?.apiUrl ?? window.location.origin} />,
+      <Overlay apiUrl={config?.apiUrl ?? window.location.origin} />,
     );
   };
 

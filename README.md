@@ -6,6 +6,17 @@ A CLI that lets an AI coding agent inspect UI bugs through annotated captures of
 
 An agent starts `pnt-ui`, which spawns or attaches to a CDP-controlled Chromium session using the same dedicated persistent profile across launches. The user annotates the page; Point and Tell returns screenshots and structured browser context for the agent to investigate.
 
+## Try the sample frontend
+
+Install dependencies once, then run the demo script:
+
+```sh
+npm ci
+./scripts/demo.sh
+```
+
+The script builds Point and Tell, starts a local sample checkout app, then launches the CLI. The final step is a headed Chromium window showing the sample app with the Point and Tell overlay. Try changing viewports, annotating the order summary, applying `NORTHSTAR10`, or refreshing the delivery estimate. Press **Ctrl+C** in the terminal to close Chromium and stop the sample server; the demo's temporary Chromium profile and saved artifacts are removed on exit. Set `PNT_DEMO_PORT` to use a different local port if `4173` is occupied.
+
 ## Core workflow
 
 - **App mode:** use the page normally.
@@ -61,7 +72,7 @@ The batch response includes the session ref, machine/session metadata, selection
 
 ## Viewport and device checks
 
-The user selects the capture viewport in the Point and Tell UI, not through CLI arguments. They can switch freely between desktop, tablet, and mobile presets while a session is open; custom dimensions are also supported. DevTools-style viewport emulation resizes the page inside the Chrome window; it does not resize the browser window. Each saved selection records the viewport active when its screenshot was captured, so selections in one session may have different viewport sizes.
+The user selects the capture viewport in the Point and Tell toolbar, not through CLI arguments. They can switch freely between desktop, tablet, and mobile presets while a session is open. DevTools-style viewport emulation resizes the page inside the Chrome window; it does not resize the browser window. Each saved selection records the viewport active when its screenshot was captured, so selections in one session may have different viewport sizes.
 
 ## Sampled interaction capture
 

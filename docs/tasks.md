@@ -6,14 +6,14 @@ The order establishes shared contracts first: viewport is selected in the Point 
 
 ## 1. Viewport and CLI session foundation
 
-Define the viewport model and initial Point and Tell CLI invocation before selection capture is built. Launch a session with a harness name and chat title, and an optional session ID. Spawn or attach to Chromium with a dedicated persistent profile that is reused across launches, then open the requested real app. The Point and Tell UI lets the user select desktop, tablet, or mobile and switch freely between them during the session; custom dimensions are also supported.
+Define the viewport model and initial Point and Tell CLI invocation before selection capture is built. Launch a session with a harness name and chat title, and an optional session ID. Spawn or attach to Chromium with a dedicated persistent profile that is reused across launches, then open the requested real app. The Point and Tell UI lets the user select desktop, tablet, or mobile and switch freely between them during the session.
 
 **Success criteria — tested behavior**
 
 - An integration flow invokes the documented CLI command with the required session details, spawns or attaches to Chromium, and displays the requested real app in the browser.
 - After closing and relaunching Point and Tell, Chromium uses the same dedicated profile; a real app's existing authenticated state remains available.
 - The resulting session ref is filesystem-safe, scopes the running session, and is returned or shown to the caller. Omitting a session ID generates one; providing one is reflected in the session ref.
-- The UI exposes every named preset and custom dimensions; selecting each one changes the fixture's emulated dimensions, and the user can freely switch between them in an open session. The active viewport is available as UI state before any selection is made.
+- A centered, rounded sticky toolbar exposes icon-only desktop, tablet, mobile, and annotation controls with tooltips. It reserves space above page content, stays in one row at narrow viewport widths, and keeps the emulated page centered in the browser window as its viewport changes.
 - If docked Chromium DevTools changes the page's actual viewport away from the selected capture viewport, Point and Tell shows a clear warning and still lets the user inspect and continue.
 - The real app remains usable in app mode, and the session survives a page refresh and navigation.
 - CLI help or equivalent usage output exposes the adopted invocation, required arguments, and optional session ID. These names and arguments are the CLI surface to adopt and document; viewport selection belongs to the UI.
@@ -32,14 +32,14 @@ From the live fixture page, enter annotate mode, draw a rectangle, add a comment
 
 ## 3. Review and edit a session
 
-Save multiple selections, then open the session summary on demand. Review each screenshot, comment, and annotation; edit comments; delete selections. Replace or recreate a selection to change its rectangle or strokes. Warn when current URL, viewport size, or scroll position differs from a capture.
+Save multiple selections, then open the session summary on demand. Review each screenshot, comment, and annotation; edit comments; delete selections. Replace or recreate a selection to change its rectangle or strokes. When the summary opens, compare the current URL, viewport size, and scroll position with each capture and warn about mismatches.
 
 **Success criteria — tested behavior**
 
 - A browser integration flow saves multiple selections and opens the summary with the correct items and screenshots.
 - Editing a comment updates the selection metadata without changing its screenshot or captured viewport; deleting a selection removes it from the included set.
 - Replacing or recreating a selection produces an updated capture with the new rectangle or strokes.
-- Changing the URL, viewport dimensions, or scroll position after capture produces a visible mismatch warning for the affected selection.
+- Opening the summary after changing the URL, viewport dimensions, or scroll position produces a visible mismatch warning for each affected selection.
 - Submitting from the summary includes only the selections still included after edits and deletions.
 
 ## 4. Submit or discard a session

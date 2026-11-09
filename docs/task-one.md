@@ -9,7 +9,7 @@ Launch Point and Tell against a real app in Chromium, establish a session identi
 
 ## Mental model
 
-Point and Tell launches or attaches to Chromium with a dedicated profile that retains browser state across launches. There is one running session, attached to one page, with one active viewport at a time. The user selects and changes that viewport in the Point and Tell UI, freely switching between desktop, tablet, and mobile (and custom dimensions). The viewport describes the page's emulated content area in CSS pixels; it does not describe the outer browser window. A later selection copies the viewport active at capture time into its own immutable metadata.
+Point and Tell launches or attaches to Chromium with a dedicated profile that retains browser state across launches. There is one running session, attached to one page, with one active viewport at a time. The user selects and changes that viewport in the Point and Tell toolbar, freely switching between desktop, tablet, and mobile. The viewport describes the page's emulated content area in CSS pixels; it does not describe the outer browser window. A later selection copies the viewport active at capture time into its own immutable metadata.
 
 ```text
 CLI invocation
@@ -72,14 +72,14 @@ The active viewport is UI/session state. Each capture copies it into `CaptureVie
 
 ## First runnable flow
 
-Run the CLI against a real app URL. Verify that the app is visible and usable in the spawned Chromium window. In the UI, select each named preset and one custom size in turn; verify that the app observes each change. Use the app normally, refresh it, and navigate while the session remains active. Close the session and launch Point and Tell again; verify that it reuses the same Chromium profile and the app's saved/authenticated state. Verify that a second session remains independently addressable by its session ref.
+Run the CLI against a real app URL. Verify that the app is visible and usable in the spawned Chromium window. In the toolbar, select each named preset in turn; verify that the app observes each change without resizing the outer browser window, and that the toolbar stays in one row. Use the app normally, refresh it, and navigate while the session remains active. Close the session and launch Point and Tell again; verify that it reuses the same Chromium profile and the app's saved/authenticated state. Verify that a second session remains independently addressable by its session ref.
 
 ## Acceptance criteria
 
 - CLI invocation and help expose the URL, required harness and chat title, and optional session ID; the launched UI provides viewport selection.
 - Point and Tell spawns or attaches to Chromium and displays the requested real app, which remains interactive in app mode.
 - A later Point and Tell launch reuses the same dedicated persistent profile, preserving app cookies and browser state.
-- The UI exposes all named presets and custom dimensions; selecting a viewport changes the exact emulated CSS-pixel dimensions, and switching remains available throughout the session.
+- A centered, rounded sticky toolbar exposes icon-only desktop, tablet, mobile, and annotation controls with tooltips. It reserves space above page content, stays in one row at narrow viewport widths, and keeps the emulated page centered in the browser window as its viewport changes.
 - If docked Chromium DevTools changes the page's actual viewport from the selected viewport, Point and Tell shows a warning and still lets the user inspect and continue.
 - The UI exposes the active viewport before any selection exists; each later capture can retain its own viewport value.
 - Session ref generation is filesystem-safe, deterministic for provided inputs, unique when the session ID is generated, and isolated across sessions.

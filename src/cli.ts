@@ -1,12 +1,13 @@
 #!/usr/bin/env node
-import { readFile } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
-import { closeApp, launchApp } from './browser.js';
+import { closeApp, launchApp, saveAnnotatedScreenshot } from './browser.js';
 import { startServer } from './server.js';
 import { createSessionContext } from './session.js';
-import { PRESETS, type SessionState } from './types.js';
+import { PRESETS, type Selection, type SessionState } from './types.js';
 
 const HELP = `Point and Tell opens a real page in a persistent Chromium profile.
 
@@ -62,21 +63,50 @@ async function main(): Promise<void> {
     session,
     viewport: { preset: 'desktop', ...PRESETS.desktop },
     presets: PRESETS,
+    selections: [],
   };
   let page: Awaited<ReturnType<typeof launchApp>>['page'] | undefined;
+  let launched: Awaited<ReturnType<typeof launchApp>> | undefined;
 
   const api = await startServer(
     () => state,
     async (viewport) => {
+      if (!launched) {
+        throw new Error('App page is not ready');
+      }
+      await launched.setViewport(viewport);
+      state = { ...state, viewport };
+    },
+    async ({ comment, coordinates }) => {
       if (!page) {
         throw new Error('App page is not ready');
       }
-      await page.setViewportSize(viewport);
-      state = { ...state, viewport };
+      const selectionId = randomUUID();
+      const artifactDir = join(
+        process.env.PNT_ARTIFACTS_DIR ?? join(homedir(), '.point-n-tell', 'artifacts'),
+        session.sessionRef,
+      );
+      await mkdir(artifactDir, { recursive: true });
+      const imagePath = join(artifactDir, `${selectionId}.webp`);
+      const pageContext = await page.evaluate(() => ({
+        url: location.href,
+        scroll: { x: scrollX, y: scrollY },
+      }));
+      await saveAnnotatedScreenshot(page, imagePath);
+      const selection: Selection = {
+        selectionId,
+        comment,
+        coordinates,
+        viewport: { ...state.viewport },
+        scroll: pageContext.scroll,
+        page: { url: pageContext.url },
+        createdAt: new Date().toISOString(),
+        imagePath,
+      };
+      state = { ...state, selections: [...state.selections, selection] };
+      return state;
     },
   );
-
-  let launched: Awaited<ReturnType<typeof launchApp>> | undefined;
 
   try {
     launched = await launchApp({
