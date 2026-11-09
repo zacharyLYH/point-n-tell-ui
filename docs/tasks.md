@@ -2,19 +2,21 @@
 
 This document breaks the product work into independently testable vertical slices. Each slice should deliver a runnable flow against a fixture page, with success judged by observable behavior across the relevant CLI, browser, API, and artifacts. Unit tests can support a slice, but do not by themselves complete it.
 
-The order establishes shared contracts first: viewport is part of the session and capture context from the first runnable slice. Every selection is captured in a specific viewport, and that viewport travels with the screenshot through review and submission. Command names and arguments introduced in the first slice are the CLI surface to adopt and document.
+The order establishes shared contracts first: viewport is selected in the Point and Tell UI and is part of capture context from the first runnable slice. Users can switch viewports freely during a session. Every selection records the viewport active when it was captured, and that viewport travels with the screenshot through review and submission. Command names and arguments introduced in the first slice are the CLI surface to adopt and document.
 
 ## 1. Viewport and CLI session foundation
 
-Define the viewport model and the initial Point and Tell CLI invocation together, before selection capture is built. A session has an explicit active viewport: a named desktop, tablet, or mobile preset, or custom dimensions. Launch a session with a harness name and chat title, and an optional session ID. Open a fixture app in a persistent Chrome session at the chosen viewport.
+Define the viewport model and initial Point and Tell CLI invocation before selection capture is built. Launch a session with a harness name and chat title, and an optional session ID. Spawn or attach to Chromium with a dedicated persistent profile that is reused across launches, then open the requested real app. The Point and Tell UI lets the user select desktop, tablet, or mobile and switch freely between them during the session; custom dimensions are also supported.
 
 **Success criteria — tested behavior**
 
-- An integration flow invokes the documented CLI command with the required session details and an explicit viewport choice, then opens the fixture page in Chrome.
+- An integration flow invokes the documented CLI command with the required session details, spawns or attaches to Chromium, and displays the requested real app in the browser.
+- After closing and relaunching Point and Tell, Chromium uses the same dedicated profile; a real app's existing authenticated state remains available.
 - The resulting session ref is filesystem-safe, scopes the running session, and is returned or shown to the caller. Omitting a session ID generates one; providing one is reflected in the session ref.
-- The fixture reports the dimensions selected by every named preset and a custom viewport, confirming that viewport emulation affects the page. The active viewport is available as session context before any selection is made.
-- The page remains usable in app mode, and the session survives a page refresh and navigation.
-- CLI help or equivalent usage output exposes the adopted invocation, required arguments, optional session ID, and viewport choices. These names and arguments are the CLI surface to adopt and document.
+- The UI exposes every named preset and custom dimensions; selecting each one changes the fixture's emulated dimensions, and the user can freely switch between them in an open session. The active viewport is available as UI state before any selection is made.
+- If docked Chromium DevTools changes the page's actual viewport away from the selected capture viewport, Point and Tell shows a clear warning and still lets the user inspect and continue.
+- The real app remains usable in app mode, and the session survives a page refresh and navigation.
+- CLI help or equivalent usage output exposes the adopted invocation, required arguments, and optional session ID. These names and arguments are the CLI surface to adopt and document; viewport selection belongs to the UI.
 
 ## 2. Annotate and save one selection
 
@@ -22,9 +24,9 @@ From the live fixture page, enter annotate mode, draw a rectangle, add a comment
 
 **Success criteria — tested behavior**
 
-- A browser integration flow draws and saves a selection at the established viewport size.
+- A browser integration flow switches viewport in the UI, draws and saves a selection, then switches to another viewport and saves another selection.
 - The saved screenshot shows the fixture, marker, and strokes, without Point and Tell controls or dimming.
-- The returned selection includes its ID, editable comment, viewport CSS-pixel coordinates in TL/TR/BR/BL order, the exact active viewport dimensions and preset/custom identity, scroll position, page URL, creation time, and an image path.
+- Each returned selection includes its ID, editable comment, viewport CSS-pixel coordinates in TL/TR/BR/BL order, the exact viewport dimensions and preset/custom identity active at capture time, scroll position, page URL, creation time, and an image path. Selections from the same session may have different viewports.
 - The image at that path is readable, and later changes to the page do not change the saved screenshot.
 - Annotation input is blocked while annotating and normal page input works in app mode.
 
@@ -54,11 +56,12 @@ Submit reviewed selections and session data as a batch. Support explicit discard
 
 ## 5. Capture session context and redact credentials
 
-Collect the supported session context alongside selections: console errors and warnings, timestamped app API requests and responses, an accessibility snapshot, origin storage/SQLite metadata where practical, and session diagnostics. Exclude static assets and bundles. Redact recognized credentials by default, with a **Redact credentials** toggle enabled by default.
+Collect the supported session context alongside selections: console errors and warnings, timestamped app API requests and responses, an accessibility snapshot, origin storage/SQLite metadata where practical, and session diagnostics. Point and Tell attaches its own browser event listeners before navigating to the app, so collection does not depend on the visible DevTools Network or Console panels being open. Exclude static assets and bundles. Redact recognized credentials by default, with a **Redact credentials** toggle enabled by default.
 
 **Success criteria — tested behavior**
 
 - A fixture app generates representative console events, app API traffic, storage values, and recognized credential values; the submitted manifest contains the documented context and excludes static assets and bundles.
+- With Chromium DevTools closed, a fixture flow generates app API requests/responses and console errors/warnings after navigation; Point and Tell captures them, demonstrating that collection starts independently of the visible DevTools panels.
 - With redaction enabled, recognized credentials in supported fields are redacted in the submitted payload.
 - The flow verifies the documented limitation: request and response bodies are not scanned, so credentials placed only in those bodies may remain visible.
 - Turning the redaction toggle off changes the submitted values as described by the UI.

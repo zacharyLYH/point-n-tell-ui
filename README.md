@@ -4,7 +4,7 @@ A CLI that lets an AI coding agent inspect UI bugs through annotated captures of
 
 ## What it does
 
-An agent starts `pnt-ui`, which opens a CDP-controlled Chrome session with a persistent profile. The user annotates the page; Agent Lens returns screenshots and structured browser context for the agent to investigate.
+An agent starts `pnt-ui`, which spawns or attaches to a CDP-controlled Chromium session using the same dedicated persistent profile across launches. The user annotates the page; Point and Tell returns screenshots and structured browser context for the agent to investigate.
 
 ## Core workflow
 
@@ -14,7 +14,7 @@ An agent starts `pnt-ui`, which opens a CDP-controlled Chrome session with a per
   - Undo, redo, or clear strokes; cancel or delete a selection.
   - The page is not dimmed. Input is blocked only while annotating.
 - **Save selection:** captures the screenshot after annotation is complete.
-  - The image includes a deterministic marker and pen strokes, but not Agent Lens UI.
+  - The image includes a deterministic marker and pen strokes, but not Point and Tell UI.
   - The comment stays editable metadata.
 - **Session summary:** open the summary sheet on demand to review all saved selections and recording diagnostics before submitting.
   - Each selection shows its screenshot, comment, and annotation, with **Edit** and **Delete** actions. Edit the comment directly; replace or recreate a selection to change its rectangle or strokes.
@@ -38,7 +38,7 @@ Agents can read images from `imagePath` and request a follow-up capture through 
 
 ## Session and storage
 
-- **Session ref:** the agent must provide the harness name and chat title. A session ID is optional; Agent Lens generates one if omitted. The resulting filesystem-safe ref (e.g. `kilo__checkout-bug__abc123`) scopes API access, artifacts, and operations.
+- **Session ref:** the agent must provide the harness name and chat title. A session ID is optional; Point and Tell generates one if omitted. The resulting filesystem-safe ref (e.g. `kilo__checkout-bug__abc123`) scopes API access, artifacts, and operations.
 - **Artifacts:** session-scoped WebP screenshots and sampled frames; payloads reference local `imagePath`s.
 - **Session API:** the CLI starts an ephemeral `127.0.0.1` API, launches or attaches Chrome, and injects overlay configuration. The overlay uses the API for selection state and rehydration; it cannot access disk.
 - **Open session:** persists through refresh and navigation until submit, discard, CLI exit, or browser disconnect.
@@ -61,7 +61,7 @@ The batch response includes the session ref, machine/session metadata, selection
 
 ## Viewport and device checks
 
-DevTools-style viewport emulation resizes the page inside the Chrome window; it does not resize the browser window. Presets include desktop, tablet, mobile, and custom dimensions.
+The user selects the capture viewport in the Point and Tell UI, not through CLI arguments. They can switch freely between desktop, tablet, and mobile presets while a session is open; custom dimensions are also supported. DevTools-style viewport emulation resizes the page inside the Chrome window; it does not resize the browser window. Each saved selection records the viewport active when its screenshot was captured, so selections in one session may have different viewport sizes.
 
 ## Sampled interaction capture
 
@@ -82,7 +82,7 @@ Record sampled frames during normal app use; full video is not sent.
 
 - **Agent integration:** publish an agent skill for setup, CLI usage, manifests, image paths, and session-ref recovery after compaction. Provide detailed CLI help.
 - **UI:** TypeScript, React, and scoped Tailwind; use shared shadcn/ui components where practical.
-- **Browser:** Playwright `launchPersistentContext` with a dedicated profile to reuse auth and state.
+- **Browser:** Playwright `launchPersistentContext` with a dedicated profile reused across launches to retain auth and state.
 - **Testing:** unit tests, fixture-page Playwright tests, visual snapshots for stable rendering, and minimal CDP end-to-end smoke tests.
 
 ## Open questions
