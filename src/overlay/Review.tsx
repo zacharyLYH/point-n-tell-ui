@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { Camera, PencilLine, Trash2 } from 'lucide-react';
 import type { ReviewContext, Selection, SessionState } from '../types.js';
-import { apiRequest } from './api.js';
+import { sendJson, useAction } from './api.js';
 import { Alert } from '../components/ui/alert.js';
 import { Badge } from '../components/ui/badge.js';
 import { Button } from '../components/ui/button.js';
@@ -17,7 +17,9 @@ import { cn } from '../lib/utils.js';
 // drift (URL or scroll) invalidates it.
 function changedValues(selection: Selection, context: ReviewContext): string[] {
   const changes: string[] = [];
-  if (selection.page.url !== context.url) changes.push('URL');
+  if (selection.page.url !== context.url) {
+    changes.push('URL');
+  }
   if (selection.scroll.x !== context.scroll.x || selection.scroll.y !== context.scroll.y) {
     changes.push('scroll position');
   }
@@ -38,46 +40,33 @@ export function Review({
   onReplace: (selection: Selection) => void;
 }) {
   const [state, setState] = useState(initial);
-  const [selectedId, setSelectedId] = useState(initial.selections[0]?.selectionId);
-  const [draft, setDraft] = useState(initial.selections[0]?.comment ?? '');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string>();
-  const selected = state.selections.find((item) => item.selectionId === selectedId);
+  const [requestedId, setRequestedId] = useState(initial.selections[0]?.selectionId);
+  const [draft, setDraft] = useState<{ id?: string; text: string }>();
+  const { busy, error, run } = useAction();
   const navRef = useRef<HTMLElement>(null);
 
-  useEffect(() => {
-    if (!state.selections.some((item) => item.selectionId === selectedId)) {
-      setSelectedId(state.selections[0]?.selectionId);
-    }
-  }, [state.selections, selectedId]);
+  // Removing the last selection falls back to the first remaining one.
+  const selectedId = state.selections.some((item) => item.selectionId === requestedId)
+    ? requestedId
+    : state.selections[0]?.selectionId;
+  const index = state.selections.findIndex((item) => item.selectionId === selectedId);
+  const selected = state.selections[index];
+  const comment = draft?.id === selectedId ? draft.text : selected?.comment ?? '';
 
-  useEffect(() => {
-    setDraft(selected?.comment ?? '');
-  }, [selected?.selectionId]);
+  const request = (path: string, body?: unknown, method?: string) =>
+    run(async () => {
+      setState(await sendJson<SessionState>(`${apiUrl}${path}`, body, method));
+    });
 
-  const run = async (path: string, init: RequestInit): Promise<void> => {
-    setBusy(true);
-    setError(undefined);
-    try {
-      setState(await apiRequest<SessionState>(`${apiUrl}${path}`, init));
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const moveSelection = (delta: number): void => {
-    const index = state.selections.findIndex((item) => item.selectionId === selectedId);
+  const moveSelection = (delta: number) => {
     const next = state.selections[index + delta];
     if (!next) {
       return;
     }
-    setSelectedId(next.selectionId);
-    const nav = navRef.current;
-    if (nav?.contains(document.activeElement)) {
+    setRequestedId(next.selectionId);
+    if (navRef.current?.contains(document.activeElement)) {
       requestAnimationFrame(() => {
-        nav.querySelector<HTMLButtonElement>(`[data-selection-id="${next.selectionId}"]`)?.focus();
+        navRef.current?.querySelector<HTMLButtonElement>(`[data-selection-id="${next.selectionId}"]`)?.focus();
       });
     }
   };
@@ -121,19 +110,20 @@ export function Review({
             aria-label="Saved selections"
             className="flex flex-col gap-1 border-b p-2 lg:overflow-y-auto lg:border-b-0 lg:border-r"
           >
-            {state.selections.map((item, index) => {
+            {state.selections.map((item, itemIndex) => {
               const itemChanges = changedValues(item, context);
+              const active = item.selectionId === selectedId;
               return (
                 <Button
                   key={item.selectionId}
                   type="button"
                   data-selection-id={item.selectionId}
-                  variant={item.selectionId === selectedId ? 'secondary' : 'ghost'}
-                  aria-current={item.selectionId === selectedId ? 'true' : undefined}
-                  onClick={() => setSelectedId(item.selectionId)}
+                  variant={active ? 'secondary' : 'ghost'}
+                  aria-current={active ? 'true' : undefined}
+                  onClick={() => setRequestedId(item.selectionId)}
                   className={cn(
                     'h-auto w-full shrink-0 justify-start gap-2 rounded-lg border p-2 text-left font-normal',
-                    item.selectionId === selectedId && 'border-primary',
+                    active && 'border-primary',
                   )}
                 >
                   <img
@@ -142,7 +132,7 @@ export function Review({
                     className="h-14 w-16 shrink-0 rounded object-cover"
                   />
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-xs font-medium">Selection {index + 1}</span>
+                    <span className="block truncate text-xs font-medium">Selection {itemIndex + 1}</span>
                     <span className="block truncate text-[11px] text-muted-foreground">{item.comment}</span>
                     <span className="mt-1 flex flex-wrap gap-1">
                       <Badge variant="secondary">Included</Badge>
@@ -162,7 +152,7 @@ export function Review({
               <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto rounded-lg bg-muted p-2">
                 <img
                   src={`${apiUrl}/selection/${selected.selectionId}/image`}
-                  alt={`Selection ${state.selections.indexOf(selected) + 1} screenshot`}
+                  alt={`Selection ${index + 1} screenshot`}
                   className="max-h-full max-w-full rounded border object-contain shadow-sm"
                 />
               </div>
@@ -176,9 +166,7 @@ export function Review({
               <>
                 <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
                   <div className="flex items-center justify-between gap-2">
-                    <h2 className="text-xs font-semibold">
-                      Selection {state.selections.indexOf(selected) + 1}
-                    </h2>
+                    <h2 className="text-xs font-semibold">Selection {index + 1}</h2>
                     <Badge variant="secondary" className="shrink-0 capitalize">
                       {selected.viewport.preset}
                     </Badge>
@@ -197,8 +185,8 @@ export function Review({
                     <Textarea
                       id="pnt-review-comment"
                       aria-label="Selection comment"
-                      value={draft}
-                      onChange={(event) => setDraft(event.target.value)}
+                      value={comment}
+                      onChange={(event) => setDraft({ id: selectedId, text: event.target.value })}
                       maxLength={5000}
                       className="min-h-24 resize-y border-ring/40 bg-muted/40 text-xs leading-relaxed shadow-sm hover:border-ring"
                     />
@@ -207,13 +195,9 @@ export function Review({
                         type="button"
                         variant="secondary"
                         size="sm"
-                        disabled={busy || !draft.trim() || draft.trim() === selected.comment}
+                        disabled={busy || !comment.trim() || comment.trim() === selected.comment}
                         onClick={() =>
-                          void run(`/selection/${selected.selectionId}`, {
-                            method: 'PATCH',
-                            headers: { 'content-type': 'application/json' },
-                            body: JSON.stringify({ comment: draft }),
-                          })
+                          void request(`/selection/${selected.selectionId}`, { comment: comment.trim() }, 'PATCH')
                         }
                       >
                         Save comment
@@ -244,9 +228,7 @@ export function Review({
                     size="sm"
                     aria-label="Delete selection"
                     disabled={busy}
-                    onClick={() =>
-                      void run(`/selection/${selected.selectionId}`, { method: 'DELETE' })
-                    }
+                    onClick={() => void request(`/selection/${selected.selectionId}`, undefined, 'DELETE')}
                   >
                     <Trash2 aria-hidden="true" />
                     Delete

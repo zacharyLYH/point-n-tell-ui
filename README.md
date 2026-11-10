@@ -17,6 +17,19 @@ npm ci
 
 The script builds Point and Tell, starts a local sample checkout app, then launches the CLI. The final step is a headed Chromium window showing the sample app with the Point and Tell overlay. Try changing viewports, annotating the order summary, applying `NORTHSTAR10`, or refreshing the delivery estimate. Press **Ctrl+C** in the terminal to close Chromium and stop the sample server; the demo's temporary Chromium profile and saved artifacts are removed on exit. Set `PNT_DEMO_PORT` to use a different local port if `4173` is occupied.
 
+## Run tests
+
+E2E tests run in a container by default: headed Chromium under Xvfb, so no windows open on your desktop. CI uses the same image and script.
+
+```sh
+npm test                       # full suite, compares against baselines
+npm test -- -g 'help'          # a single test
+npm run test:update            # accept current screenshots as baselines
+npm run test:run               # headed run on the host
+```
+
+Baselines live in `tests/screenshots/` and are committed. Runs use Playwright's snapshot assertions (`toHaveScreenshot` / `toMatchSnapshot`); failures show a diff and write actual/diff images to `test-results/`. `npm run test:update` runs with `--update-snapshots`, regenerating baselines inside the container, so container rendering is the source of truth. CI runs the same arm64 image (`ubuntu-24.04-arm`) so its comparisons match the committed baselines. Screenshots render at 1x; the retina-only capture scaling is exercised by `npm run test:run -- -g 'saves identical previews'`.
+
 ## Core workflow
 
 - **App mode:** use the page normally.
@@ -51,6 +64,7 @@ Agents can read images from `imagePath` and request a follow-up capture through 
 
 - **Session ref:** the agent must provide the harness name and chat title. A session ID is optional; Point and Tell generates one if omitted. The resulting filesystem-safe ref (e.g. `kilo__checkout-bug__abc123`) scopes API access, artifacts, and operations.
 - **Artifacts:** session-scoped WebP screenshots and sampled frames; payloads reference local `imagePath`s.
+- **CLI output:** prints the session ref, app URL, overlay URL, and the session's screenshot directory. Set `PNT_MACHINE=1` for a JSON line an agent can parse.
 - **Session API:** the CLI starts an ephemeral `127.0.0.1` API, launches or attaches Chrome, and injects overlay configuration. The overlay uses the API for selection state and rehydration; it cannot access disk.
 - **Open session:** persists through refresh and navigation until submit, discard, CLI exit, or browser disconnect.
 - **Concurrency:** multiple sessions are supported; operations target an explicit session ref.
@@ -72,7 +86,7 @@ The batch response includes the session ref, machine/session metadata, selection
 
 ## Viewport and device checks
 
-The user selects the capture viewport in the Point and Tell toolbar, not through CLI arguments. They can switch freely between desktop, tablet, and mobile presets while a session is open. DevTools-style viewport emulation resizes the page inside the Chrome window; it does not resize the browser window. Each saved selection records the viewport active when its screenshot was captured, so selections in one session may have different viewport sizes.
+The user selects the capture viewport in the Point and Tell toolbar, not through CLI arguments. They can switch freely between desktop, tablet, and mobile presets while a session is open. The toolbar is pinned in a 64px band at the top of the window, and the page is offset below it so the overlay never covers app content or blocks annotation. The Chrome window is resized to fit the preset and the page is emulated inside it at that exact size. If the display is shorter than the preset plus browser chrome, the viewport is reduced to what fits, because a viewport taller than the window looks complete to the page and never scrolls; each saved selection records the size actually applied, so selections in one session may differ.
 
 ## Sampled interaction capture
 

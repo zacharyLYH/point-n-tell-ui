@@ -1,0 +1,13 @@
+{
+  "files.watcherExclude": {
+    "**/test-results/**": true,
+    "**/playwright-report/**": true,
+    "**/tests/screenshots/**": true,
+    "**/dist/**": true
+  },
+  "search.exclude": {
+    "**/test-results/**": true,
+    "**/playwright-report/**": true,
+    "**/dist/**": true
+  }
+}

@@ -57,122 +57,93 @@ async function main(): Promise<void> {
   });
   const profileDir =
     process.env.PNT_PROFILE_DIR ?? join(homedir(), '.point-n-tell', 'chromium-profile');
+  const artifactsDir = join(
+    process.env.PNT_ARTIFACTS_DIR ?? join(homedir(), '.point-n-tell', 'artifacts'),
+    session.sessionRef,
+  );
   const overlayScript = await readFile(new URL('./overlay.js', import.meta.url), 'utf8');
 
-  let state: SessionState = {
+  const state: SessionState = {
     session,
     viewport: { preset: 'desktop', ...PRESETS.desktop },
-    presets: PRESETS,
     selections: [],
   };
-  let page: Awaited<ReturnType<typeof launchApp>>['page'] | undefined;
   let launched: Awaited<ReturnType<typeof launchApp>> | undefined;
   let reviewContext: ReviewContext | undefined;
 
-  const readPageContext = async (): Promise<ReviewContext> => {
-    if (!page) {
+  const app = () => {
+    if (!launched) {
       throw new Error('App page is not ready');
     }
-    return page.evaluate(() => ({
+    return launched;
+  };
+  const pageContext = () =>
+    app().page.evaluate(() => ({
       url: location.href,
-      viewport: { width: innerWidth, height: innerHeight },
       scroll: { x: scrollX, y: scrollY },
     }));
-  };
 
   const api = await startServer({
     getState: () => state,
     applyViewport: async (viewport) => {
-      if (!launched) {
-        throw new Error('App page is not ready');
-      }
-      await launched.setViewport(viewport);
-      state = { ...state, viewport };
+      // Keep the preset label, record the size the window could actually show.
+      state.viewport = { preset: viewport.preset, ...(await app().setViewport(viewport)) };
     },
     saveSelection: async ({ comment, coordinates }, replaceId) => {
-      if (!page || !launched) {
-        throw new Error('App page is not ready');
-      }
-      const app = launched;
+      const { page } = app();
       if (replaceId && !state.selections.some((item) => item.selectionId === replaceId)) {
         throw new Error('Selection not found');
       }
+      await mkdir(artifactsDir, { recursive: true });
       const selectionId = randomUUID();
-      const artifactDir = join(
-        process.env.PNT_ARTIFACTS_DIR ?? join(homedir(), '.point-n-tell', 'artifacts'),
-        session.sessionRef,
-      );
-      await mkdir(artifactDir, { recursive: true });
-      const imagePath = join(artifactDir, `${selectionId}.webp`);
-      const pageContext = await page.evaluate(() => ({
-        url: location.href,
-        scroll: { x: scrollX, y: scrollY },
-      }));
-      const topLeft = coordinates[0];
-      const bottomRight = coordinates[2];
+      const imagePath = join(artifactsDir, `${selectionId}.webp`);
+      const [topLeft, , bottomRight] = coordinates;
       await saveAnnotatedScreenshot(page, imagePath, {
         x: topLeft.x,
         y: topLeft.y,
         width: bottomRight.x - topLeft.x,
         height: bottomRight.y - topLeft.y,
       });
-      await app.clearViewport();
-      await app.setViewport(state.viewport);
+      const { url: pageUrl, scroll } = await pageContext();
       const selection: Selection = {
         selectionId,
         comment,
         coordinates,
         viewport: { ...state.viewport },
-        scroll: pageContext.scroll,
-        page: { url: pageContext.url },
+        scroll,
+        page: { url: pageUrl },
         createdAt: new Date().toISOString(),
         imagePath,
       };
-      state = {
-        ...state,
-        selections: replaceId
-          ? state.selections.map((item) => (item.selectionId === replaceId ? selection : item))
-          : [...state.selections, selection],
-      };
+      state.selections = replaceId
+        ? state.selections.map((item) => (item.selectionId === replaceId ? selection : item))
+        : [...state.selections, selection];
       return state;
     },
     updateComment: async (selectionId, comment) => {
-      if (!state.selections.some((item) => item.selectionId === selectionId)) {
+      const selection = state.selections.find((item) => item.selectionId === selectionId);
+      if (!selection) {
         throw new Error('Selection not found');
       }
-      state = {
-        ...state,
-        selections: state.selections.map((item) =>
-          item.selectionId === selectionId ? { ...item, comment } : item,
-        ),
-      };
+      selection.comment = comment;
       return state;
     },
     deleteSelection: async (selectionId) => {
-      state = {
-        ...state,
-        selections: state.selections.filter((item) => item.selectionId !== selectionId),
-      };
+      state.selections = state.selections.filter((item) => item.selectionId !== selectionId);
       return state;
     },
     openReview: async () => {
-      if (!launched) {
-        throw new Error('App page is not ready');
-      }
-      reviewContext = await readPageContext();
-      await launched.expandForReview();
-      return { state, context: reviewContext };
+      const context = await pageContext();
+      reviewContext = context;
+      await app().expandForReview();
+      return { state, context };
     },
     closeReview: async () => {
-      if (!launched) {
-        throw new Error('App page is not ready');
+      await app().setViewport(state.viewport);
+      if (reviewContext) {
+        await app().page.evaluate(({ x, y }) => window.scrollTo(x, y), reviewContext.scroll);
       }
-      const context = reviewContext;
       reviewContext = undefined;
-      await launched.setViewport(state.viewport);
-      if (context) {
-        await page?.evaluate((scroll) => window.scrollTo(scroll.x, scroll.y), context.scroll);
-      }
       return state;
     },
   });
@@ -184,45 +155,42 @@ async function main(): Promise<void> {
       overlayScript,
       apiUrl: api.url,
       cdpPort: process.env.PNT_CDP_PORT,
+      onViewport: (viewport) => {
+        state.viewport = { preset: 'desktop', ...viewport };
+      },
     });
-    page = launched.page;
 
     console.log(
       [
         'Point and Tell ready',
-        `  sessionRef: ${session.sessionRef}`,
-        `  app:        ${url.href}`,
-        `  overlay:    ${api.url}`,
-        `  profile:    ${profileDir}`,
+        `  sessionRef:  ${session.sessionRef}`,
+        `  app:         ${url.href}`,
+        `  overlay:     ${api.url}`,
+        `  screenshots: ${artifactsDir}`,
         '',
         'Press Ctrl+C to close.',
       ].join('\n'),
     );
-    console.log(
-      `PNT_UI_READY ${JSON.stringify({
-        ...session,
-        appUrl: url.href,
-        apiUrl: api.url,
-        cdpUrl: process.env.PNT_CDP_PORT
-          ? `http://127.0.0.1:${process.env.PNT_CDP_PORT}`
-          : undefined,
-      })}`,
-    );
+    if (process.env.PNT_MACHINE === '1') {
+      console.log(
+        JSON.stringify({
+          ...session,
+          appUrl: url.href,
+          apiUrl: api.url,
+          cdpUrl: process.env.PNT_CDP_PORT
+            ? `http://127.0.0.1:${process.env.PNT_CDP_PORT}`
+            : undefined,
+        }),
+      );
+    }
 
+    const { context, page } = launched;
     await new Promise<void>((resolve) => {
-      let finished = false;
-      const finish = () => {
-        if (finished) {
-          return;
-        }
-        finished = true;
-        resolve();
-      };
-
+      const finish = () => resolve();
       process.once('SIGINT', finish);
       process.once('SIGTERM', finish);
-      launched?.context.once('close', finish);
-      launched?.page.once('close', finish);
+      context.once('close', finish);
+      page.once('close', finish);
     });
   } finally {
     await api.close().catch(() => undefined);

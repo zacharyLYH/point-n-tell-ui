@@ -37,12 +37,10 @@ export type Selection = {
 export type SessionState = {
   session: SessionContext;
   viewport: ViewportSpec;
-  presets: typeof PRESETS;
   selections: Selection[];
 };
 
 export type ReviewContext = {
   url: string;
-  viewport: { width: number; height: number };
   scroll: { x: number; y: number };
 };

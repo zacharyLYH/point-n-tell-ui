@@ -1,0 +1,23 @@
+FROM node:22-bookworm
+
+# Xvfb + xauth provide the display; Chromium stays headed so window sizing,
+# CDP emulation, and screenshots exercise the real browser (same as CI).
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends xvfb xauth \
+  && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+RUN npm ci
+
+# Installs the browser version pinned by package-lock.json plus its system deps.
+RUN npx playwright install --with-deps chromium
+
+COPY . .
+
+# Mirrors CI: headed Chromium at DPR 1 under Xvfb on a 1920x1280 display, tall
+# enough for the tablet preset (1024) plus browser chrome, so no preset is
+# clamped by the screen.
+ENTRYPOINT ["xvfb-run", "-a", "-s", "-screen 0 1920x1280x24"]
+CMD ["npm", "run", "test:run"]

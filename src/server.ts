@@ -10,7 +10,7 @@ import {
   type ViewportSpec,
 } from './types.js';
 
-export type SessionApi = {
+type SessionApi = {
   getState: () => SessionState;
   applyViewport: (viewport: ViewportSpec) => Promise<void>;
   saveSelection: (
@@ -24,11 +24,10 @@ export type SessionApi = {
 };
 
 function send(res: ServerResponse, status: number, body: unknown): void {
-  res.writeHead(status, { 'content-type': 'application/json' });
-  res.end(JSON.stringify(body));
+  res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(body));
 }
 
-async function readBody(req: IncomingMessage): Promise<string> {
+async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
   let body = '';
   for await (const chunk of req) {
     body += chunk;
@@ -36,30 +35,24 @@ async function readBody(req: IncomingMessage): Promise<string> {
       throw new Error('Request body too large');
     }
   }
-  return body;
+  return JSON.parse(body || '{}') as Record<string, unknown>;
 }
 
 export function parseViewport(value: unknown): ViewportSpec {
-  if (!value || typeof value !== 'object') {
-    throw new Error('Invalid viewport');
-  }
-
-  const { preset, width, height } = value as Record<string, unknown>;
-  const validPreset = preset === 'custom' || (typeof preset === 'string' && preset in PRESETS);
+  const { preset, width, height } = (value ?? {}) as Record<string, unknown>;
+  const named =
+    typeof preset === 'string' && preset in PRESETS ? (preset as keyof typeof PRESETS) : undefined;
   const w = Number(width);
   const h = Number(height);
 
-  if (!validPreset) {
+  if (preset !== 'custom' && !named) {
     throw new Error('preset must be desktop, tablet, mobile, or custom');
   }
   if (!Number.isInteger(w) || !Number.isInteger(h) || w <= 0 || h <= 0) {
     throw new Error('width and height must be positive integers');
   }
-  if (preset !== 'custom') {
-    const expected = PRESETS[preset as keyof typeof PRESETS];
-    if (expected.width !== w || expected.height !== h) {
-      throw new Error(`${preset} must be ${expected.width}x${expected.height}`);
-    }
+  if (named && (PRESETS[named].width !== w || PRESETS[named].height !== h)) {
+    throw new Error(`${named} must be ${PRESETS[named].width}x${PRESETS[named].height}`);
   }
 
   return { preset: preset as ViewportSpec['preset'], width: w, height: h };
@@ -73,36 +66,35 @@ function parseComment(value: unknown): string {
 }
 
 function parseSelection(value: unknown): Pick<Selection, 'comment' | 'coordinates'> {
-  if (!value || typeof value !== 'object') {
-    throw new Error('Invalid selection');
-  }
-  const { comment, coordinates } = value as Record<string, unknown>;
+  const { comment, coordinates } = (value ?? {}) as Record<string, unknown>;
   const parsedComment = parseComment(comment);
   if (!Array.isArray(coordinates) || coordinates.length !== 4) {
     throw new Error('Selection must have four rectangle corners');
   }
-  const points = coordinates.map((point): Point => {
-    if (!point || typeof point !== 'object') {
-      throw new Error('Invalid selection coordinate');
-    }
-    const { x, y } = point as Record<string, unknown>;
+  const points = coordinates.map((corner): Point => {
+    const { x, y } = (corner ?? {}) as Record<string, unknown>;
     if (typeof x !== 'number' || typeof y !== 'number' || !Number.isFinite(x) || !Number.isFinite(y)) {
       throw new Error('Selection coordinates must be finite numbers');
     }
     return { x, y };
   }) as Coordinates;
   const [topLeft, topRight, bottomRight, bottomLeft] = points;
-  if (
-    topRight.x <= topLeft.x || bottomLeft.y <= topLeft.y ||
-    topLeft.y !== topRight.y || topRight.x !== bottomRight.x ||
-    bottomRight.y !== bottomLeft.y || bottomLeft.x !== topLeft.x
-  ) {
+  const axisAligned =
+    topLeft.y === topRight.y &&
+    topRight.x === bottomRight.x &&
+    bottomRight.y === bottomLeft.y &&
+    bottomLeft.x === topLeft.x &&
+    topRight.x > topLeft.x &&
+    bottomLeft.y > topLeft.y;
+  if (!axisAligned) {
     throw new Error('Selection coordinates must describe a non-empty rectangle');
   }
   return { comment: parsedComment, coordinates: points };
 }
 
-export async function startServer(api: SessionApi): Promise<{ url: string; close: () => Promise<void> }> {
+export async function startServer(
+  api: SessionApi,
+): Promise<{ url: string; close: () => Promise<void> }> {
   const server = createServer(async (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Headers', 'content-type');
@@ -115,56 +107,42 @@ export async function startServer(api: SessionApi): Promise<{ url: string; close
     }
 
     try {
-      const selectionRoute = req.url?.match(/^\/selection\/([\w-]+)(\/image)?$/);
-      const selectionId = selectionRoute ? decodeURIComponent(selectionRoute[1]) : undefined;
+      const body = req.method === 'GET' ? {} : await readJson(req);
+      const [, selectionId, image] = req.url?.match(/^\/selection\/([\w-]+)(\/image)?$/) ?? [];
 
-      if (req.method === 'GET' && req.url === '/state') {
-        send(res, 200, api.getState());
-        return;
-      }
-
-      if (req.method === 'GET' && selectionRoute && selectionRoute[2] && selectionId) {
-        const selection = api.getState().selections.find((item) => item.selectionId === selectionId);
-        if (!selection) {
-          throw new Error('Selection not found');
+      switch (`${req.method} ${req.url}`) {
+        case 'GET /state':
+          return send(res, 200, api.getState());
+        case 'POST /viewport':
+          await api.applyViewport(parseViewport(body));
+          return send(res, 200, api.getState());
+        case 'POST /selection': {
+          const selection = parseSelection(body);
+          const replaceId = typeof body.replaceId === 'string' ? body.replaceId : undefined;
+          return send(res, 200, await api.saveSelection(selection, replaceId));
         }
-        const image = await readFile(selection.imagePath);
-        res.writeHead(200, { 'content-type': 'image/webp', 'cache-control': 'no-store' }).end(image);
-        return;
+        case 'POST /review/open':
+          return send(res, 200, await api.openReview());
+        case 'POST /review/close':
+          return send(res, 200, await api.closeReview());
       }
 
-      if (req.method === 'POST' && req.url === '/viewport') {
-        await api.applyViewport(parseViewport(JSON.parse(await readBody(req))));
-        send(res, 200, api.getState());
-        return;
-      }
-
-      if (req.method === 'POST' && req.url === '/selection') {
-        const body = JSON.parse(await readBody(req)) as Record<string, unknown>;
-        const replaceId = typeof body.replaceId === 'string' ? body.replaceId : undefined;
-        send(res, 200, await api.saveSelection(parseSelection(body), replaceId));
-        return;
-      }
-
-      if (req.method === 'PATCH' && selectionRoute && selectionId && !selectionRoute[2]) {
-        const body = JSON.parse(await readBody(req)) as Record<string, unknown>;
-        send(res, 200, await api.updateComment(selectionId, parseComment(body.comment)));
-        return;
-      }
-
-      if (req.method === 'DELETE' && selectionRoute && selectionId && !selectionRoute[2]) {
-        send(res, 200, await api.deleteSelection(selectionId));
-        return;
-      }
-
-      if (req.method === 'POST' && req.url === '/review/open') {
-        send(res, 200, await api.openReview());
-        return;
-      }
-
-      if (req.method === 'POST' && req.url === '/review/close') {
-        send(res, 200, await api.closeReview());
-        return;
+      if (selectionId) {
+        if (req.method === 'GET' && image) {
+          const selection = api.getState().selections.find((item) => item.selectionId === selectionId);
+          if (!selection) {
+            throw new Error('Selection not found');
+          }
+          res.writeHead(200, { 'content-type': 'image/webp', 'cache-control': 'no-store' });
+          res.end(await readFile(selection.imagePath));
+          return;
+        }
+        if (req.method === 'PATCH') {
+          return send(res, 200, await api.updateComment(selectionId, parseComment(body.comment)));
+        }
+        if (req.method === 'DELETE') {
+          return send(res, 200, await api.deleteSelection(selectionId));
+        }
       }
 
       send(res, 404, { error: 'Not found' });

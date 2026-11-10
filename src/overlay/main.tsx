@@ -16,12 +16,12 @@ if (window.top === window && !window.__PNT_OVERLAY__) {
   window.__PNT_OVERLAY__ = true;
 
   const mount = () => {
-    if (!document.getElementById('pnt-toolbar-safe-area')) {
-      const safeArea = document.createElement('style');
-      safeArea.id = 'pnt-toolbar-safe-area';
-      safeArea.textContent = 'body { padding-top: 64px !important; }';
-      document.documentElement.append(safeArea);
-    }
+    // The toolbar owns the top band; the page is pushed below it so the app is
+    // never covered and every pixel stays visible and annotatable.
+    const safeArea = document.createElement('style');
+    safeArea.id = 'pnt-toolbar-safe-area';
+    safeArea.textContent = 'body { padding-top: 64px !important; }';
+    document.documentElement.append(safeArea);
 
     const host = document.createElement('div');
     host.id = 'pnt-ui-root';
@@ -36,9 +36,7 @@ if (window.top === window && !window.__PNT_OVERLAY__) {
     shadow.append(root);
     document.documentElement.append(host);
 
-    createRoot(root).render(
-      <Overlay apiUrl={config?.apiUrl ?? window.location.origin} />,
-    );
+    createRoot(root).render(<Overlay apiUrl={config?.apiUrl ?? window.location.origin} />);
   };
 
   if (document.documentElement) {
@@ -47,5 +45,3 @@ if (window.top === window && !window.__PNT_OVERLAY__) {
     window.addEventListener('DOMContentLoaded', mount, { once: true });
   }
 }
-
-export {};

@@ -1,28 +1,18 @@
-import type { PointerEventHandler } from 'react';
 import type { Point } from '../types.js';
-import type { AnnotationState } from './useAnnotation.js';
+import type { Annotation } from './useAnnotation.js';
 
 function pathFor(points: Point[]): string {
   return points.map(({ x, y }, index) => `${index ? 'L' : 'M'} ${x} ${y}`).join(' ');
 }
 
 export function AnnotationCanvas({
-  state,
-  width,
-  height,
+  annotation,
   selectionNumber,
-  onPointerDown,
-  onPointerMove,
-  onPointerUp,
 }: {
-  state: AnnotationState;
-  width: number;
-  height: number;
+  annotation: Annotation;
   selectionNumber: number;
-  onPointerDown: PointerEventHandler<SVGSVGElement>;
-  onPointerMove: PointerEventHandler<SVGSVGElement>;
-  onPointerUp: PointerEventHandler<SVGSVGElement>;
 }) {
+  const { state, onPointerDown, onPointerMove, onPointerUp } = annotation;
   const rectangle = state.rectangle;
   const liveStroke = state.gesture?.tool === 'pen' ? state.gesture.points : [];
   const strokes = liveStroke.length > 1 ? [...state.strokes, liveStroke] : state.strokes;
@@ -31,8 +21,6 @@ export function AnnotationCanvas({
     <svg
       aria-label="Annotation canvas"
       className="fixed inset-0 h-full w-full"
-      viewBox={`0 0 ${width} ${height}`}
-      preserveAspectRatio="none"
       style={{ pointerEvents: 'auto', touchAction: 'none', cursor: state.tool === 'rectangle' ? 'crosshair' : 'cell' }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
@@ -54,7 +42,6 @@ export function AnnotationCanvas({
             stroke="#f97316"
             strokeDasharray="7 4"
             strokeWidth="2"
-            vectorEffect="non-scaling-stroke"
           />
           <g data-pnt-selection-badge transform={`translate(${rectangle.x + 14} ${rectangle.y + 14})`}>
             <circle r="12" fill="#f97316" />

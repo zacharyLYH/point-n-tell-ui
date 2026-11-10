@@ -1,11 +1,9 @@
-import { useCallback, useReducer, type PointerEvent } from 'react';
+import { useReducer, type PointerEvent } from 'react';
 import type { Coordinates, Point } from '../types.js';
 
-export type Rectangle = { x: number; y: number; width: number; height: number };
-export type Tool = 'rectangle' | 'pen';
-type Gesture =
-  | { tool: 'rectangle'; start: Point }
-  | { tool: 'pen'; points: Point[] };
+type Rectangle = { x: number; y: number; width: number; height: number };
+type Tool = 'rectangle' | 'pen';
+type Gesture = { tool: 'rectangle'; start: Point } | { tool: 'pen'; points: Point[] };
 
 export type AnnotationState = {
   rectangle?: Rectangle;
@@ -16,13 +14,12 @@ export type AnnotationState = {
   tool: Tool;
 };
 
-type Action =
+export type AnnotationAction =
   | { type: 'reset' }
-  | { type: 'seed'; rectangle: Rectangle; comment: string }
+  | { type: 'seed'; coordinates: Coordinates; comment: string }
   | { type: 'comment'; value: string }
   | { type: 'tool'; value: Tool }
-  | { type: 'start-rectangle'; point: Point }
-  | { type: 'start-pen'; point: Point }
+  | { type: 'start'; point: Point }
   | { type: 'move'; point: Point }
   | { type: 'finish' }
   | { type: 'undo' }
@@ -36,6 +33,25 @@ const initialState: AnnotationState = {
   tool: 'rectangle',
 };
 
+function toRectangle([topLeft, , bottomRight]: Coordinates): Rectangle {
+  return {
+    x: topLeft.x,
+    y: topLeft.y,
+    width: bottomRight.x - topLeft.x,
+    height: bottomRight.y - topLeft.y,
+  };
+}
+
+function toCoordinates(rectangle: Rectangle): Coordinates {
+  const { x, y, width, height } = rectangle;
+  return [
+    { x, y },
+    { x: x + width, y },
+    { x: x + width, y: y + height },
+    { x, y: y + height },
+  ];
+}
+
 function boundedPoint(point: Point, rectangle: Rectangle): Point {
   return {
     x: Math.max(rectangle.x, Math.min(point.x, rectangle.x + rectangle.width)),
@@ -43,17 +59,43 @@ function boundedPoint(point: Point, rectangle: Rectangle): Point {
   };
 }
 
-function reducer(state: AnnotationState, action: Action): AnnotationState {
+function inside(point: Point, rectangle: Rectangle): boolean {
+  return (
+    point.x >= rectangle.x &&
+    point.x <= rectangle.x + rectangle.width &&
+    point.y >= rectangle.y &&
+    point.y <= rectangle.y + rectangle.height
+  );
+}
+
+function rectangleBetween(start: Point, end: Point): Rectangle {
+  return {
+    x: Math.min(start.x, end.x),
+    y: Math.min(start.y, end.y),
+    width: Math.abs(end.x - start.x),
+    height: Math.abs(end.y - start.y),
+  };
+}
+
+function reducer(state: AnnotationState, action: AnnotationAction): AnnotationState {
   switch (action.type) {
     case 'reset':
       return initialState;
     case 'seed':
-      return { ...initialState, rectangle: action.rectangle, comment: action.comment };
+      return { ...initialState, rectangle: toRectangle(action.coordinates), comment: action.comment };
     case 'comment':
       return { ...state, comment: action.value };
     case 'tool':
       return { ...state, tool: action.value };
-    case 'start-rectangle':
+    case 'start':
+      if (state.tool === 'pen') {
+        return state.rectangle && inside(action.point, state.rectangle)
+          ? {
+              ...state,
+              gesture: { tool: 'pen', points: [boundedPoint(action.point, state.rectangle)] },
+            }
+          : state;
+      }
       return {
         ...state,
         rectangle: { x: action.point.x, y: action.point.y, width: 0, height: 0 },
@@ -61,30 +103,17 @@ function reducer(state: AnnotationState, action: Action): AnnotationState {
         redoStrokes: [],
         gesture: { tool: 'rectangle', start: action.point },
       };
-    case 'start-pen':
-      return { ...state, gesture: { tool: 'pen', points: [action.point] } };
-    case 'move':
-      if (state.gesture?.tool === 'rectangle') {
-        return {
-          ...state,
-          rectangle: {
-            x: Math.min(state.gesture.start.x, action.point.x),
-            y: Math.min(state.gesture.start.y, action.point.y),
-            width: Math.abs(action.point.x - state.gesture.start.x),
-            height: Math.abs(action.point.y - state.gesture.start.y),
-          },
-        };
+    case 'move': {
+      const { gesture, rectangle } = state;
+      if (!gesture) {
+        return state;
       }
-      if (state.gesture?.tool === 'pen' && state.rectangle) {
-        return {
-          ...state,
-          gesture: {
-            tool: 'pen',
-            points: [...state.gesture.points, boundedPoint(action.point, state.rectangle)],
-          },
-        };
+      if (gesture.tool === 'rectangle') {
+        return { ...state, rectangle: rectangleBetween(gesture.start, action.point) };
       }
-      return state;
+      const point = rectangle ? boundedPoint(action.point, rectangle) : action.point;
+      return { ...state, gesture: { tool: 'pen', points: [...gesture.points, point] } };
+    }
     case 'finish':
       if (state.gesture?.tool === 'pen' && state.gesture.points.length > 1) {
         return {
@@ -118,41 +147,32 @@ function reducer(state: AnnotationState, action: Action): AnnotationState {
 export function useAnnotation() {
   const [state, dispatch] = useReducer(reducer, initialState);
 
-  const onPointerDown = useCallback((event: PointerEvent<SVGSVGElement>) => {
+  const pointerAction = (event: PointerEvent<SVGSVGElement>, action: AnnotationAction) => {
     event.preventDefault();
     event.stopPropagation();
+    dispatch(action);
+  };
+
+  const pointFrom = (event: PointerEvent<SVGSVGElement>): Point => ({
+    x: event.clientX,
+    y: event.clientY,
+  });
+
+  const onPointerDown = (event: PointerEvent<SVGSVGElement>) => {
     event.currentTarget.setPointerCapture(event.pointerId);
-    const point = { x: event.clientX, y: event.clientY };
-    if (state.tool === 'rectangle') {
-      dispatch({ type: 'start-rectangle', point });
-    } else if (state.rectangle && point.x >= state.rectangle.x &&
-      point.x <= state.rectangle.x + state.rectangle.width &&
-      point.y >= state.rectangle.y && point.y <= state.rectangle.y + state.rectangle.height) {
-      dispatch({ type: 'start-pen', point: boundedPoint(point, state.rectangle) });
-    }
-  }, [state.rectangle, state.tool]);
+    pointerAction(event, { type: 'start', point: pointFrom(event) });
+  };
 
-  const onPointerMove = useCallback((event: PointerEvent<SVGSVGElement>) => {
-    event.preventDefault();
-    event.stopPropagation();
-    if (state.gesture) dispatch({ type: 'move', point: { x: event.clientX, y: event.clientY } });
-  }, [state.gesture]);
+  const onPointerMove = (event: PointerEvent<SVGSVGElement>) =>
+    pointerAction(event, { type: 'move', point: pointFrom(event) });
 
-  const onPointerUp = useCallback((event: PointerEvent<SVGSVGElement>) => {
-    event.preventDefault();
-    event.stopPropagation();
-    dispatch({ type: 'finish' });
-  }, []);
+  const onPointerUp = (event: PointerEvent<SVGSVGElement>) => pointerAction(event, { type: 'finish' });
 
-  const rectangle = state.rectangle;
-  const coordinates: Coordinates | undefined = rectangle && rectangle.width >= 4 && rectangle.height >= 4
-    ? [
-        { x: rectangle.x, y: rectangle.y },
-        { x: rectangle.x + rectangle.width, y: rectangle.y },
-        { x: rectangle.x + rectangle.width, y: rectangle.y + rectangle.height },
-        { x: rectangle.x, y: rectangle.y + rectangle.height },
-      ]
-    : undefined;
+  const { rectangle } = state;
+  const coordinates =
+    rectangle && rectangle.width >= 4 && rectangle.height >= 4 ? toCoordinates(rectangle) : undefined;
 
   return { state, dispatch, coordinates, onPointerDown, onPointerMove, onPointerUp };
 }
+
+export type Annotation = ReturnType<typeof useAnnotation>;

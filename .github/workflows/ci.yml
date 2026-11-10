@@ -6,20 +6,27 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # arm64 so the container matches the checked-in screenshot baselines
+    # (public repos get free arm64 runners).
+    runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/build-push-action@v6
         with:
-          node-version: 20
-          cache: npm
+          context: .
+          file: Dockerfile.test
+          tags: point-n-tell-ui-tests
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
-      - run: npm ci
-
-      - run: npx playwright install --with-deps chromium
-
-      - run: xvfb-run -a npm test
+      # Same command as local: headed Chromium under Xvfb in the container.
+      - run: sh scripts/test-docker.sh
+        env:
+          PNT_SKIP_BUILD: '1'
 
       - if: always()
         uses: actions/upload-artifact@v4

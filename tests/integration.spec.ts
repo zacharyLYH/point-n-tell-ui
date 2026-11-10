@@ -1,309 +1,27 @@
-import { chromium, expect, test, type Browser, type Page } from '@playwright/test';
+import { expect, test, type Browser } from '@playwright/test';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { copyFile, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { createServer } from 'node:http';
-import { createServer as createPortServer } from 'node:net';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import type { SessionState } from '../src/types.js';
-
-const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
-const SCREENSHOT_DIR = join(ROOT, 'tests', 'screenshots');
-
-type Ready = {
-  harness: string;
-  chatTitle: string;
-  sessionId: string;
-  sessionRef: string;
-  appUrl: string;
-  apiUrl: string;
-  cdpUrl: string;
-};
-
-const FIXTURE = `<!doctype html>
-<html>
-  <head><title>PNT Fixture</title></head>
-  <body style="margin:0;padding:24px;font:14px system-ui">
-    <h1>PNT Fixture</h1>
-    <p>Page viewport: <strong id="dims"></strong></p>
-    <button id="app-button" onclick="document.body.dataset.clicked='yes'">App button</button>
-    <p id="path"></p>
-    <div style="height:1600px"></div>
-    <script>
-      const render = () => {
-        document.getElementById('dims').textContent = innerWidth + ' x ' + innerHeight;
-        document.getElementById('path').textContent = location.pathname;
-      };
-      render();
-      addEventListener('resize', render);
-      if (!localStorage.getItem('pnt-initialized')) {
-        document.cookie = 'pnt-auth=seeded; path=/; max-age=31536000';
-        localStorage.setItem('pnt-initialized', 'yes');
-      }
-    </script>
-  </body>
-</html>`;
-
-const PREVIEW_FIXTURE = `<!doctype html>
-<html>
-  <head><title>PNT Preview Fixture</title></head>
-  <body style="margin:0;background:rgb(255,255,255);font:14px system-ui">
-    <h1>PNT Preview Fixture</h1>
-    <div id="target" style="position:absolute;top:200px;right:32px;width:120px;height:80px">
-      <div style="position:absolute;top:0;left:0;width:60px;height:80px;background:rgb(220,38,38)"></div>
-      <div style="position:absolute;top:0;left:60px;width:60px;height:80px;background:rgb(37,99,235)"></div>
-    </div>
-    <div style="height:2400px"></div>
-  </body>
-</html>`;
-
-async function freePort(): Promise<number> {
-  const server = createPortServer();
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', () => resolve());
-  });
-  const address = server.address();
-  const port = typeof address === 'object' && address ? address.port : 0;
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-  return port;
-}
-
-async function startFixture(html = FIXTURE): Promise<{
-  url: string;
-  close: () => Promise<void>;
-}> {
-  const server = createServer((_request, response) => {
-    response.setHeader('content-type', 'text/html');
-    response.end(html);
-  });
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', () => resolve());
-  });
-  const address = server.address();
-  if (!address || typeof address === 'string') {
-    throw new Error('Fixture server failed to start');
-  }
-  return {
-    url: `http://127.0.0.1:${address.port}`,
-    close: () =>
-      new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      }),
-  };
-}
-
-async function launchCli(options: {
-  url: string;
-  profileDir: string;
-  sessionId: string;
-  cdpPort: number;
-}): Promise<{ child: ChildProcess; ready: Ready; stderr: () => string }> {
-  const child = spawn(
-    process.execPath,
-    [
-      join(ROOT, 'dist', 'cli.js'),
-      options.url,
-      '--harness',
-      'Kilo',
-      '--chat-title',
-      'Checkout Bug',
-      '--session-id',
-      options.sessionId,
-    ],
-    {
-      env: {
-        ...process.env,
-        PNT_PROFILE_DIR: options.profileDir,
-        PNT_ARTIFACTS_DIR: join(options.profileDir, 'artifacts'),
-        PNT_HEADLESS: '0',
-        PNT_CDP_PORT: String(options.cdpPort),
-      },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    },
-  );
-
-  let stderr = '';
-  child.stderr?.on('data', (chunk: Buffer) => {
-    stderr += chunk.toString();
-  });
-
-  const ready = await new Promise<Ready>((resolve, reject) => {
-    let stdout = '';
-    const timer = setTimeout(() => {
-      reject(new Error(`CLI did not start.\nstdout:\n${stdout}\nstderr:\n${stderr}`));
-    }, 30_000);
-
-    child.stdout?.on('data', (chunk: Buffer) => {
-      stdout += chunk.toString();
-      const line = stdout
-        .split('\n')
-        .find((candidate) => candidate.startsWith('PNT_UI_READY '));
-      if (line) {
-        clearTimeout(timer);
-        resolve(JSON.parse(line.slice('PNT_UI_READY '.length)) as Ready);
-      }
-    });
-
-    child.once('exit', (code) => {
-      clearTimeout(timer);
-      reject(
-        new Error(`CLI exited with ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`),
-      );
-    });
-  });
-
-  return { child, ready, stderr: () => stderr };
-}
-
-async function stopCli(child: ChildProcess): Promise<void> {
-  if (child.exitCode !== null) {
-    return;
-  }
-  await new Promise<void>((resolve) => {
-    child.once('exit', () => resolve());
-    child.kill('SIGINT');
-  });
-}
-
-async function connect(cdpUrl: string): Promise<Browser> {
-  return chromium.connectOverCDP(cdpUrl);
-}
-
-async function appPage(browser: Browser, fixtureUrl: string) {
-  const context = browser.contexts()[0];
-  const page = context.pages().find((candidate) => candidate.url().startsWith(fixtureUrl));
-  if (!page) {
-    throw new Error(`App page not found. Open pages: ${context.pages().map((p) => p.url()).join(', ')}`);
-  }
-  return page;
-}
-
-async function expectCenteredWindow(page: Page): Promise<void> {
-  const metrics = await page.evaluate(() => ({
-    x: window.screenX,
-    y: window.screenY,
-    width: window.outerWidth,
-    height: window.outerHeight,
-    screenWidth: window.screen.width,
-    screenHeight: window.screen.height,
-  }));
-  const left = Math.max(
-    0,
-    Math.round((metrics.screenWidth - Math.min(metrics.width, metrics.screenWidth)) / 2),
-  );
-  expect(Math.abs(metrics.x - left)).toBeLessThanOrEqual(2);
-  // The window manager may keep the title bar below the menu bar, so compare
-  // vertical centers with room for that offset.
-  expect(Math.abs(metrics.y + metrics.height / 2 - metrics.screenHeight / 2)).toBeLessThanOrEqual(40);
-}
-
-async function saveScreenshot(page: Page, name: string): Promise<void> {
-  const path = join(SCREENSHOT_DIR, name);
-  await page.screenshot({ path });
-  await test.info().attach(name, { path, contentType: 'image/png' });
-}
-
-async function retainScreenshot(source: string, name: string, contentType: string): Promise<void> {
-  const path = join(SCREENSHOT_DIR, name);
-  await copyFile(source, path);
-  await test.info().attach(name, { path, contentType });
-}
-
-async function previewSignature(page: Page, path: string) {
-  const base64 = (await readFile(path)).toString('base64');
-  return page.evaluate(async (encoded) => {
-    const image = new Image();
-    image.src = `data:image/webp;base64,${encoded}`;
-    await image.decode();
-    const canvas = document.createElement('canvas');
-    canvas.width = image.naturalWidth;
-    canvas.height = image.naturalHeight;
-    const context = canvas.getContext('2d')!;
-    context.drawImage(image, 0, 0);
-    const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
-    const digest = await crypto.subtle.digest('SHA-256', pixels);
-    const sample = (x: number, y: number) => Array.from(context.getImageData(x, y, 1, 1).data).slice(0, 3);
-    return {
-      width: canvas.width,
-      height: canvas.height,
-      hash: Array.from(new Uint8Array(digest))
-        .map((value) => value.toString(16).padStart(2, '0'))
-        .join(''),
-      left: sample(Math.floor(canvas.width * 0.35), Math.floor(canvas.height / 2)),
-      right: sample(Math.floor(canvas.width * 0.8), Math.floor(canvas.height / 2)),
-    };
-  }, base64);
-}
-
-async function composePreviewStrip(
-  page: Page,
-  images: { path: string; label: string }[],
-  outPath: string,
-): Promise<void> {
-  const payload = await Promise.all(
-    images.map(async ({ path, label }) => ({
-      label,
-      base64: (await readFile(path)).toString('base64'),
-    })),
-  );
-  const dataUrl = await page.evaluate(async (items) => {
-    const scale = 2;
-    const gap = 20;
-    const labelHeight = 22;
-    const decoded = await Promise.all(
-      items.map(async (item) => {
-        const image = new Image();
-        image.src = `data:image/webp;base64,${item.base64}`;
-        await image.decode();
-        return image;
-      }),
-    );
-    const cellWidth = Math.max(...decoded.map((image) => image.naturalWidth)) * scale;
-    const cellHeight = Math.max(...decoded.map((image) => image.naturalHeight)) * scale;
-    const canvas = document.createElement('canvas');
-    canvas.width = decoded.length * cellWidth + (decoded.length + 1) * gap;
-    canvas.height = cellHeight + labelHeight + gap * 2;
-    const context = canvas.getContext('2d')!;
-    context.fillStyle = '#ffffff';
-    context.fillRect(0, 0, canvas.width, canvas.height);
-    context.fillStyle = '#111827';
-    context.font = '600 14px system-ui';
-    decoded.forEach((image, index) => {
-      const x = gap + index * (cellWidth + gap);
-      context.fillText(items[index].label, x, gap + 14);
-      context.drawImage(image, x, gap + labelHeight, cellWidth, cellHeight);
-      context.strokeStyle = '#d1d5db';
-      context.strokeRect(x - 0.5, gap + labelHeight - 0.5, cellWidth + 1, cellHeight + 1);
-    });
-    return canvas.toDataURL('image/png');
-  }, payload);
-  await writeFile(outPath, Buffer.from(dataUrl.replace(/^data:image\/png;base64,/, ''), 'base64'));
-  await test.info().attach('preview-parity.png', { path: outPath, contentType: 'image/png' });
-}
-
-async function drawSelection(
-  page: Page,
-  comment: string,
-  from: [number, number],
-  to: [number, number],
-): Promise<void> {
-  await page.getByRole('button', { name: 'Start annotation' }).click();
-  await page.getByLabel('Selection comment').fill(comment);
-  await page.mouse.move(...from);
-  await page.mouse.down();
-  await page.mouse.move(...to, { steps: 3 });
-  await page.mouse.up();
-  await page.getByRole('button', { name: 'Save selection' }).click();
-  await expect(page.getByRole('button', { name: 'Start annotation' })).toBeVisible();
-}
-
-async function sessionState(apiUrl: string): Promise<SessionState> {
-  return (await fetch(`${apiUrl}/state`)).json() as Promise<SessionState>;
-}
+import {
+  appPage,
+  connect,
+  drawSelection,
+  expectCenteredWindow,
+  launchCli,
+  sessionState,
+  stopCli,
+} from './support/app.js';
+import { freePort, PREVIEW_FIXTURE, startFixture } from './support/fixtures.js';
+import { ROOT } from './support/paths.js';
+import {
+  composePreviewStrip,
+  previewSignature,
+  retainScreenshot,
+  saveScreenshot,
+} from './support/screenshots.js';
 
 test('runs the real CLI headed, persists the profile, and switches viewports', async () => {
   test.setTimeout(120_000);
@@ -395,7 +113,7 @@ test('runs the real CLI headed, persists the profile, and switches viewports', a
     expect(firstSelection.imagePath).toContain('.webp');
     const firstImage = await readFile(firstSelection.imagePath);
     expect(firstImage.toString('ascii', 8, 12)).toBe('WEBP');
-    await retainScreenshot(firstSelection.imagePath, 'selection-mobile.webp', 'image/webp');
+    await retainScreenshot(firstSelection.imagePath, 'selection-mobile.webp');
     const imageSize = await page.evaluate(async (base64) => {
       const image = new Image();
       image.src = `data:image/webp;base64,${base64}`;
@@ -734,7 +452,7 @@ test('saves identical previews of the same element at every viewport', async () 
         label: `${preset.label} · ${preset.width} × ${preset.height}`,
         path: state.selections[index].imagePath,
       })),
-      join(SCREENSHOT_DIR, 'preview-parity.png'),
+      'preview-parity.png',
     );
 
     // Captures at different presets describe the same page, so reviewing them

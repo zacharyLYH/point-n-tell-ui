@@ -4,7 +4,14 @@ import { resolve } from 'node:path';
 import { defineConfig } from 'vite';
 
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [
+    react({
+      babel: {
+        plugins: [['babel-plugin-react-compiler', {}]],
+      },
+    }),
+    tailwindcss(),
+  ],
   define: {
     'process.env.NODE_ENV': JSON.stringify('production'),
   },
