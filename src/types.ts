@@ -40,3 +40,9 @@ export type SessionState = {
   presets: typeof PRESETS;
   selections: Selection[];
 };
+
+export type ReviewContext = {
+  url: string;
+  viewport: { width: number; height: number };
+  scroll: { x: number; y: number };
+};

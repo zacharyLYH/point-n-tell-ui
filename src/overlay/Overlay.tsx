@@ -2,29 +2,24 @@ import { useCallback, useEffect, useState } from 'react';
 import { Layers2, MousePointer2 } from 'lucide-react';
 import { AnnotationCanvas } from './AnnotationCanvas.js';
 import { AnnotationTools } from './AnnotationTools.js';
+import { Review } from './Review.js';
+import { apiRequest } from './api.js';
 import { useAnnotation } from './useAnnotation.js';
 import { ViewportControls } from './ViewportControls.js';
-import type { SessionState, ViewportPreset } from '../types.js';
+import type { ReviewContext, Selection, SessionState, ViewportPreset } from '../types.js';
 import { Alert } from '../components/ui/alert.js';
-import { Badge } from '../components/ui/badge.js';
 import { Button } from '../components/ui/button.js';
 import { Card, CardContent, CardHeader } from '../components/ui/card.js';
 import { Separator } from '../components/ui/separator.js';
 import { Tooltip } from '../components/ui/tooltip.js';
-
-async function readSession(response: Response): Promise<SessionState> {
-  const body = (await response.json()) as SessionState | { error?: string };
-  if (!response.ok) {
-    throw new Error('error' in body ? body.error : `Request failed (${response.status})`);
-  }
-  return body as SessionState;
-}
 
 export function Overlay({ apiUrl }: { apiUrl: string }) {
   const [state, setState] = useState<SessionState>();
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [annotating, setAnnotating] = useState(false);
+  const [replaceId, setReplaceId] = useState<string>();
+  const [review, setReview] = useState<{ state: SessionState; context: ReviewContext }>();
   const [actualViewport, setActualViewport] = useState(() => ({
     width: window.innerWidth,
     height: window.innerHeight,
@@ -41,8 +36,7 @@ export function Overlay({ apiUrl }: { apiUrl: string }) {
 
   useEffect(() => {
     const controller = new AbortController();
-    fetch(`${apiUrl}/state`, { signal: controller.signal })
-      .then(readSession)
+    apiRequest<SessionState>(`${apiUrl}/state`, { signal: controller.signal })
       .then(setState)
       .catch((reason: unknown) => {
         if (!controller.signal.aborted) {
@@ -67,12 +61,11 @@ export function Overlay({ apiUrl }: { apiUrl: string }) {
     setBusy(true);
     setError(undefined);
     try {
-      const response = await fetch(`${apiUrl}/viewport`, {
+      setState(await apiRequest<SessionState>(`${apiUrl}/viewport`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ preset, width, height }),
-      });
-      setState(await readSession(response));
+      }));
       setActualViewport({ width: window.innerWidth, height: window.innerHeight });
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
@@ -83,6 +76,7 @@ export function Overlay({ apiUrl }: { apiUrl: string }) {
 
   const resetAnnotation = useCallback(() => {
     dispatchAnnotation({ type: 'reset' });
+    setReplaceId(undefined);
     setAnnotating(false);
   }, [dispatchAnnotation]);
 
@@ -91,19 +85,101 @@ export function Overlay({ apiUrl }: { apiUrl: string }) {
     setBusy(true);
     setError(undefined);
     try {
-      const response = await fetch(`${apiUrl}/selection`, {
+      setState(await apiRequest<SessionState>(`${apiUrl}/selection`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ comment: draft.comment, coordinates }),
-      });
-      setState(await readSession(response));
+        body: JSON.stringify({ comment: draft.comment, coordinates, replaceId }),
+      }));
       resetAnnotation();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
       setBusy(false);
     }
-  }, [apiUrl, coordinates, draft.comment, resetAnnotation]);
+  }, [apiUrl, coordinates, draft.comment, replaceId, resetAnnotation]);
+
+  const openReview = useCallback(async () => {
+    setBusy(true);
+    setError(undefined);
+    try {
+      const opened = await apiRequest<{ state: SessionState; context: ReviewContext }>(
+        `${apiUrl}/review/open`,
+        { method: 'POST' },
+      );
+      setState(opened.state);
+      setReview(opened);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setBusy(false);
+    }
+  }, [apiUrl]);
+
+  const closeReview = useCallback(async (): Promise<boolean> => {
+    setBusy(true);
+    setError(undefined);
+    try {
+      setState(await apiRequest<SessionState>(`${apiUrl}/review/close`, { method: 'POST' }));
+      setReview(undefined);
+      setActualViewport({ width: window.innerWidth, height: window.innerHeight });
+      return true;
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }, [apiUrl]);
+
+  const restoreCaptureContext = useCallback(async (selection: Selection) => {
+    setState(await apiRequest<SessionState>(`${apiUrl}/viewport`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(selection.viewport),
+    }));
+    const deadline = Date.now() + 2_000;
+    while (Date.now() < deadline) {
+      if (
+        Math.abs(window.innerWidth - selection.viewport.width) <= 1 &&
+        Math.abs(window.innerHeight - selection.viewport.height) <= 1
+      ) {
+        break;
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, 16));
+    }
+    await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+    window.scrollTo(selection.scroll.x, selection.scroll.y);
+    setActualViewport({ width: window.innerWidth, height: window.innerHeight });
+  }, [apiUrl]);
+
+  const replaceSelection = useCallback(async (selection: Selection) => {
+    if (!(await closeReview())) return;
+    setBusy(true);
+    setError(undefined);
+    try {
+      // Recreate the capture in the viewport and scroll it was taken in, so the
+      // seeded rectangle is not positioned against the current viewport.
+      await restoreCaptureContext(selection);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+      setBusy(false);
+      return;
+    }
+    setBusy(false);
+    setReplaceId(selection.selectionId);
+    dispatchAnnotation({
+      type: 'seed',
+      rectangle: {
+        x: selection.coordinates[0].x,
+        y: selection.coordinates[0].y,
+        width: selection.coordinates[2].x - selection.coordinates[0].x,
+        height: selection.coordinates[2].y - selection.coordinates[0].y,
+      },
+      comment: selection.comment,
+    });
+    setError(undefined);
+    setAnnotating(true);
+  }, [closeReview, dispatchAnnotation, restoreCaptureContext]);
 
   const viewport = state?.viewport;
   const mismatched = viewport && (
@@ -112,6 +188,18 @@ export function Overlay({ apiUrl }: { apiUrl: string }) {
   const setComment = useCallback((comment: string) => {
     dispatchAnnotation({ type: 'comment', value: comment });
   }, [dispatchAnnotation]);
+
+  if (review) {
+    return (
+      <Review
+        apiUrl={apiUrl}
+        state={review.state}
+        context={review.context}
+        onClose={() => void closeReview()}
+        onReplace={(selection) => void replaceSelection(selection)}
+      />
+    );
+  }
 
   return (
     <>
@@ -151,16 +239,25 @@ export function Overlay({ apiUrl }: { apiUrl: string }) {
             />
           ) : (
             <>
-              <Tooltip content="Saved selections">
-                <Badge
+              <Tooltip content="Review saved selections">
+                <Button
+                  type="button"
+                  size="icon"
                   variant="secondary"
-                  role="status"
-                  aria-label={`${state?.selections.length ?? 0} saved selections`}
-                  className="flex size-9 shrink-0 items-center justify-center gap-1 p-1"
+                  aria-label="Open session summary"
+                  disabled={busy || !state?.selections.length}
+                  onClick={() => void openReview()}
+                  className="gap-1"
                 >
                   <Layers2 aria-hidden="true" />
-                  <span className="text-[10px]">{state?.selections.length ?? 0}</span>
-                </Badge>
+                  <span
+                    role="status"
+                    aria-label={`${state?.selections.length ?? 0} saved selections`}
+                    className="text-[10px]"
+                  >
+                    {state?.selections.length ?? 0}
+                  </span>
+                </Button>
               </Tooltip>
               <Tooltip content="Annotate">
                 <Button
@@ -168,7 +265,7 @@ export function Overlay({ apiUrl }: { apiUrl: string }) {
                   size="icon"
                   aria-label="Start annotation"
                   onClick={() => {
-                    dispatchAnnotation({ type: 'reset' });
+                    resetAnnotation();
                     setError(undefined);
                     setAnnotating(true);
                   }}

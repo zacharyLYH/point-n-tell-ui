@@ -18,6 +18,7 @@ export type AnnotationState = {
 
 type Action =
   | { type: 'reset' }
+  | { type: 'seed'; rectangle: Rectangle; comment: string }
   | { type: 'comment'; value: string }
   | { type: 'tool'; value: Tool }
   | { type: 'start-rectangle'; point: Point }
@@ -46,6 +47,8 @@ function reducer(state: AnnotationState, action: Action): AnnotationState {
   switch (action.type) {
     case 'reset':
       return initialState;
+    case 'seed':
+      return { ...initialState, rectangle: action.rectangle, comment: action.comment };
     case 'comment':
       return { ...state, comment: action.value };
     case 'tool':

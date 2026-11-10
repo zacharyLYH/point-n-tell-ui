@@ -46,17 +46,17 @@ export function AnnotationCanvas({
       {rectangle && rectangle.width > 0 && rectangle.height > 0 && (
         <>
           <rect
-            x={rectangle.x}
-            y={rectangle.y}
-            width={rectangle.width}
-            height={rectangle.height}
+            x={rectangle.x + 1}
+            y={rectangle.y + 1}
+            width={Math.max(0, rectangle.width - 2)}
+            height={Math.max(0, rectangle.height - 2)}
             fill="transparent"
             stroke="#f97316"
             strokeDasharray="7 4"
             strokeWidth="2"
             vectorEffect="non-scaling-stroke"
           />
-          <g transform={`translate(${rectangle.x} ${rectangle.y})`}>
+          <g data-pnt-selection-badge transform={`translate(${rectangle.x + 14} ${rectangle.y + 14})`}>
             <circle r="12" fill="#f97316" />
             <text y="4" textAnchor="middle" fill="white" fontSize="11" fontWeight="700">
               {selectionNumber}

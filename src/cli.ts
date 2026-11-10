@@ -7,7 +7,7 @@ import { parseArgs } from 'node:util';
 import { closeApp, launchApp, saveAnnotatedScreenshot } from './browser.js';
 import { startServer } from './server.js';
 import { createSessionContext } from './session.js';
-import { PRESETS, type Selection, type SessionState } from './types.js';
+import { PRESETS, type ReviewContext, type Selection, type SessionState } from './types.js';
 
 const HELP = `Point and Tell opens a real page in a persistent Chromium profile.
 
@@ -67,19 +67,35 @@ async function main(): Promise<void> {
   };
   let page: Awaited<ReturnType<typeof launchApp>>['page'] | undefined;
   let launched: Awaited<ReturnType<typeof launchApp>> | undefined;
+  let reviewContext: ReviewContext | undefined;
 
-  const api = await startServer(
-    () => state,
-    async (viewport) => {
+  const readPageContext = async (): Promise<ReviewContext> => {
+    if (!page) {
+      throw new Error('App page is not ready');
+    }
+    return page.evaluate(() => ({
+      url: location.href,
+      viewport: { width: innerWidth, height: innerHeight },
+      scroll: { x: scrollX, y: scrollY },
+    }));
+  };
+
+  const api = await startServer({
+    getState: () => state,
+    applyViewport: async (viewport) => {
       if (!launched) {
         throw new Error('App page is not ready');
       }
       await launched.setViewport(viewport);
       state = { ...state, viewport };
     },
-    async ({ comment, coordinates }) => {
-      if (!page) {
+    saveSelection: async ({ comment, coordinates }, replaceId) => {
+      if (!page || !launched) {
         throw new Error('App page is not ready');
+      }
+      const app = launched;
+      if (replaceId && !state.selections.some((item) => item.selectionId === replaceId)) {
+        throw new Error('Selection not found');
       }
       const selectionId = randomUUID();
       const artifactDir = join(
@@ -92,7 +108,16 @@ async function main(): Promise<void> {
         url: location.href,
         scroll: { x: scrollX, y: scrollY },
       }));
-      await saveAnnotatedScreenshot(page, imagePath);
+      const topLeft = coordinates[0];
+      const bottomRight = coordinates[2];
+      await saveAnnotatedScreenshot(page, imagePath, {
+        x: topLeft.x,
+        y: topLeft.y,
+        width: bottomRight.x - topLeft.x,
+        height: bottomRight.y - topLeft.y,
+      });
+      await app.clearViewport();
+      await app.setViewport(state.viewport);
       const selection: Selection = {
         selectionId,
         comment,
@@ -103,10 +128,54 @@ async function main(): Promise<void> {
         createdAt: new Date().toISOString(),
         imagePath,
       };
-      state = { ...state, selections: [...state.selections, selection] };
+      state = {
+        ...state,
+        selections: replaceId
+          ? state.selections.map((item) => (item.selectionId === replaceId ? selection : item))
+          : [...state.selections, selection],
+      };
       return state;
     },
-  );
+    updateComment: async (selectionId, comment) => {
+      if (!state.selections.some((item) => item.selectionId === selectionId)) {
+        throw new Error('Selection not found');
+      }
+      state = {
+        ...state,
+        selections: state.selections.map((item) =>
+          item.selectionId === selectionId ? { ...item, comment } : item,
+        ),
+      };
+      return state;
+    },
+    deleteSelection: async (selectionId) => {
+      state = {
+        ...state,
+        selections: state.selections.filter((item) => item.selectionId !== selectionId),
+      };
+      return state;
+    },
+    openReview: async () => {
+      if (!launched) {
+        throw new Error('App page is not ready');
+      }
+      reviewContext = await readPageContext();
+      await launched.expandForReview();
+      return { state, context: reviewContext };
+    },
+    closeReview: async () => {
+      if (!launched) {
+        throw new Error('App page is not ready');
+      }
+      const context = reviewContext;
+      reviewContext = undefined;
+      await launched.setViewport(state.viewport);
+      if (context) {
+        await page?.evaluate((scroll) => window.scrollTo(scroll.x, scroll.y), context.scroll);
+      }
+      return state;
+    },
+  });
 
   try {
     launched = await launchApp({

@@ -1,12 +1,27 @@
+import { readFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import {
   PRESETS,
   type Coordinates,
   type Point,
+  type ReviewContext,
   type Selection,
   type SessionState,
   type ViewportSpec,
 } from './types.js';
+
+export type SessionApi = {
+  getState: () => SessionState;
+  applyViewport: (viewport: ViewportSpec) => Promise<void>;
+  saveSelection: (
+    selection: Pick<Selection, 'comment' | 'coordinates'>,
+    replaceId?: string,
+  ) => Promise<SessionState>;
+  updateComment: (selectionId: string, comment: string) => Promise<SessionState>;
+  deleteSelection: (selectionId: string) => Promise<SessionState>;
+  openReview: () => Promise<{ state: SessionState; context: ReviewContext }>;
+  closeReview: () => Promise<SessionState>;
+};
 
 function send(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { 'content-type': 'application/json' });
@@ -50,14 +65,19 @@ export function parseViewport(value: unknown): ViewportSpec {
   return { preset: preset as ViewportSpec['preset'], width: w, height: h };
 }
 
+function parseComment(value: unknown): string {
+  if (typeof value !== 'string' || !value.trim() || value.length > 5000) {
+    throw new Error('Comment must contain 1–5000 characters');
+  }
+  return value.trim();
+}
+
 function parseSelection(value: unknown): Pick<Selection, 'comment' | 'coordinates'> {
   if (!value || typeof value !== 'object') {
     throw new Error('Invalid selection');
   }
   const { comment, coordinates } = value as Record<string, unknown>;
-  if (typeof comment !== 'string' || !comment.trim() || comment.length > 5000) {
-    throw new Error('Comment must contain 1–5000 characters');
-  }
+  const parsedComment = parseComment(comment);
   if (!Array.isArray(coordinates) || coordinates.length !== 4) {
     throw new Error('Selection must have four rectangle corners');
   }
@@ -79,18 +99,14 @@ function parseSelection(value: unknown): Pick<Selection, 'comment' | 'coordinate
   ) {
     throw new Error('Selection coordinates must describe a non-empty rectangle');
   }
-  return { comment: comment.trim(), coordinates: points };
+  return { comment: parsedComment, coordinates: points };
 }
 
-export async function startServer(
-  getState: () => SessionState,
-  applyViewport: (viewport: ViewportSpec) => Promise<void>,
-  saveSelection: (selection: Pick<Selection, 'comment' | 'coordinates'>) => Promise<SessionState>,
-): Promise<{ url: string; close: () => Promise<void> }> {
+export async function startServer(api: SessionApi): Promise<{ url: string; close: () => Promise<void> }> {
   const server = createServer(async (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Headers', 'content-type');
-    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,DELETE,OPTIONS');
     res.setHeader('Access-Control-Allow-Private-Network', 'true');
 
     if (req.method === 'OPTIONS') {
@@ -99,20 +115,55 @@ export async function startServer(
     }
 
     try {
+      const selectionRoute = req.url?.match(/^\/selection\/([\w-]+)(\/image)?$/);
+      const selectionId = selectionRoute ? decodeURIComponent(selectionRoute[1]) : undefined;
+
       if (req.method === 'GET' && req.url === '/state') {
-        send(res, 200, getState());
+        send(res, 200, api.getState());
+        return;
+      }
+
+      if (req.method === 'GET' && selectionRoute && selectionRoute[2] && selectionId) {
+        const selection = api.getState().selections.find((item) => item.selectionId === selectionId);
+        if (!selection) {
+          throw new Error('Selection not found');
+        }
+        const image = await readFile(selection.imagePath);
+        res.writeHead(200, { 'content-type': 'image/webp', 'cache-control': 'no-store' }).end(image);
         return;
       }
 
       if (req.method === 'POST' && req.url === '/viewport') {
-        const viewport = parseViewport(JSON.parse(await readBody(req)));
-        await applyViewport(viewport);
-        send(res, 200, getState());
+        await api.applyViewport(parseViewport(JSON.parse(await readBody(req))));
+        send(res, 200, api.getState());
         return;
       }
 
       if (req.method === 'POST' && req.url === '/selection') {
-        send(res, 200, await saveSelection(parseSelection(JSON.parse(await readBody(req)))));
+        const body = JSON.parse(await readBody(req)) as Record<string, unknown>;
+        const replaceId = typeof body.replaceId === 'string' ? body.replaceId : undefined;
+        send(res, 200, await api.saveSelection(parseSelection(body), replaceId));
+        return;
+      }
+
+      if (req.method === 'PATCH' && selectionRoute && selectionId && !selectionRoute[2]) {
+        const body = JSON.parse(await readBody(req)) as Record<string, unknown>;
+        send(res, 200, await api.updateComment(selectionId, parseComment(body.comment)));
+        return;
+      }
+
+      if (req.method === 'DELETE' && selectionRoute && selectionId && !selectionRoute[2]) {
+        send(res, 200, await api.deleteSelection(selectionId));
+        return;
+      }
+
+      if (req.method === 'POST' && req.url === '/review/open') {
+        send(res, 200, await api.openReview());
+        return;
+      }
+
+      if (req.method === 'POST' && req.url === '/review/close') {
+        send(res, 200, await api.closeReview());
         return;
       }
 
