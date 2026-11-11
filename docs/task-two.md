@@ -9,21 +9,21 @@ Let the user select a region, explain it with a comment, optionally sketch on it
 
 ## Mental model
 
-The page stays visible and undimmed. App mode leaves the page fully usable. Annotate mode temporarily takes input for drawing; it does not change the selected viewport. Saving freezes the page image and annotation at the current URL, scroll position, and viewport.
+The page stays visible and undimmed. App mode leaves the page fully usable. Annotate mode temporarily takes input for drawing; it does not change the selected viewport. Capture freezes the page image and annotation at the current URL, scroll position, and viewport, then a shared capture modal collects the comment before save.
 
 ```text
 Live page + active viewport
-  └─ Annotate: rectangle + comment + optional strokes
+  └─ Annotate: rectangle + optional strokes
        ├─ Edit: undo / redo / clear / cancel
-       └─ Save: immutable screenshot + selection metadata
+       └─ Capture → comment modal → Save immutable screenshot + metadata
 ```
 
 ## User flow
 
-1. Enter annotate mode and draw one rectangle around the issue.
-2. Add a comment and optionally sketch within the selection.
-3. Undo, redo, or clear strokes; cancel the selection if needed.
-4. Save the selection. The user can return to app mode and continue using the page.
+1. Enter annotate mode and draw one rectangle around the issue; optionally sketch within it.
+2. Undo, redo, or clear strokes; cancel the selection if needed.
+3. Capture the selection to open the shared capture modal.
+4. Add a comment and save, or cancel. The user can then return to app mode and continue using the page.
 
 ## Design direction
 
@@ -33,7 +33,7 @@ Take interaction and visual cues from Excalidraw: a compact floating tool palett
 
 - Rectangle coordinates are viewport CSS pixels, ordered top-left, top-right, bottom-right, bottom-left. The captured viewport is copied from the active UI viewport at save time.
 - The screenshot represents the page at save time and includes a deterministic selection marker and pen strokes. It excludes all Point and Tell controls and the page is not dimmed.
-- The comment is editable metadata. Editing it later does not change the saved screenshot.
+- The capture modal asks for a comment before saving. The comment is editable metadata; editing it later does not change the saved screenshot.
 - Save records the page URL, viewport, scroll position, creation time, and screenshot path with the selection.
 - Later page changes, viewport changes, or navigation do not alter the saved screenshot or its capture metadata.
 
@@ -63,7 +63,7 @@ Run the real CLI against the browser fixture. Switch the viewport in the Point a
 
 ## Acceptance criteria
 
-- A Playwright integration flow draws a rectangle, enters a comment, adds strokes, undoes and redoes a stroke, and saves the selection.
+- A Playwright integration flow draws a rectangle, adds strokes, undoes and redoes a stroke, captures, enters a comment in the shared modal, and saves the selection.
 - The saved screenshot shows the fixture page, rectangle marker, and strokes, with no Point and Tell controls or dimming; the screenshot can be opened from its `imagePath`.
 - Returned metadata matches the rectangle in viewport CSS pixels and includes the viewport active at save time, scroll position, page URL, timestamp, comment, selection ID, and image path.
 - A second selection saved after switching viewport carries the new viewport; the first selection's image and metadata remain unchanged.

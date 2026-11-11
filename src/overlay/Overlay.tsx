@@ -60,27 +60,19 @@ export function Overlay({ apiUrl }: { apiUrl: string }) {
     setAnnotating(false);
   };
 
-  const applyViewport = (preset: ViewportPreset, width: number, height: number) => {
-    void run(async () => {
-      setState(await sendJson(`${apiUrl}/viewport`, { preset, width, height }));
-      syncViewport();
+  const send = (path: string, body?: unknown) =>
+    run(async () => {
+      setState(await sendJson<SessionState>(`${apiUrl}${path}`, body));
     });
+
+  const applyViewport = async (preset: ViewportPreset, width: number, height: number) => {
+    await send('/viewport', { preset, width, height });
+    syncViewport();
   };
 
   const saveSelection = () => {
-    if (!coordinates || !draft.comment.trim()) {
-      return;
-    }
-    void run(async () => {
-      setState(
-        await sendJson(`${apiUrl}/selection`, {
-          comment: draft.comment,
-          coordinates,
-          replaceId,
-        }),
-      );
-      reset();
-    });
+    if (!coordinates || !draft.comment.trim()) return;
+    void send('/selection', { comment: draft.comment, coordinates, replaceId }).then(reset);
   };
 
   const openReview = () => {
@@ -91,13 +83,11 @@ export function Overlay({ apiUrl }: { apiUrl: string }) {
     });
   };
 
-  const closeReview = () => {
-    void run(async () => {
-      setState(await sendJson(`${apiUrl}/review/close`));
+  const closeReview = () =>
+    void send('/review/close').then(() => {
       setReview(undefined);
       syncViewport();
     });
-  };
 
   // Re-capture in the viewport and scroll the selection was taken in, so the
   // seeded rectangle is not positioned against the current viewport.

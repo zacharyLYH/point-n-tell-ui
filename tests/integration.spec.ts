@@ -1,20 +1,30 @@
-import { expect, test, type Browser } from '@playwright/test';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { expect, test } from '@playwright/test';
+import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { SessionState } from '../src/types.js';
+import type { SessionState, SubmissionResult } from '../src/types.js';
 import {
   appPage,
   connect,
   drawSelection,
   expectCenteredWindow,
   launchCli,
+  pathExists,
   sessionState,
   stopCli,
+  trackSession,
+  waitForExit,
 } from './support/app.js';
-import { freePort, PREVIEW_FIXTURE, startFixture } from './support/fixtures.js';
+import {
+  CONTEXT_FIXTURE,
+  freePort,
+  PREVIEW_FIXTURE,
+  SCROLL_FIXTURE,
+  SECRETS_FIXTURE,
+  startFixture,
+} from './support/fixtures.js';
 import { ROOT } from './support/paths.js';
 import {
   composePreviewStrip,
@@ -28,8 +38,7 @@ test('runs the real CLI headed, persists the profile, and switches viewports', a
 
   const fixture = await startFixture();
   const profileDir = await mkdtemp(join(tmpdir(), 'pnt-profile-'));
-  const children: ChildProcess[] = [];
-  const browsers: Browser[] = [];
+  const { children, browsers, cleanup } = trackSession(fixture, profileDir);
 
   try {
     const first = await launchCli({
@@ -220,14 +229,7 @@ test('runs the real CLI headed, persists the profile, and switches viewports', a
       .poll(() => secondPage.evaluate(() => [innerWidth, innerHeight]))
       .toEqual([1440, 900]);
   } finally {
-    for (const browser of browsers) {
-      await browser.close().catch(() => undefined);
-    }
-    for (const child of children) {
-      await stopCli(child).catch(() => undefined);
-    }
-    await fixture.close();
-    await rm(profileDir, { recursive: true, force: true });
+    await cleanup();
   }
 });
 
@@ -236,8 +238,7 @@ test('reviews, edits, deletes, and replaces selections', async () => {
 
   const fixture = await startFixture();
   const profileDir = await mkdtemp(join(tmpdir(), 'pnt-review-'));
-  const children: ChildProcess[] = [];
-  const browsers: Browser[] = [];
+  const { children, browsers, cleanup } = trackSession(fixture, profileDir);
 
   try {
     const cli = await launchCli({
@@ -262,7 +263,7 @@ test('reviews, edits, deletes, and replaces selections', async () => {
       'Beta issue',
       'Gamma issue',
     ]);
-    const [alpha, , gamma] = state.selections;
+    const [alpha, beta, gamma] = state.selections;
     const alphaImage = await readFile(alpha.imagePath);
     const alphaHash = createHash('sha256').update(alphaImage).digest('hex');
     const gammaImage = await readFile(gamma.imagePath);
@@ -278,7 +279,9 @@ test('reviews, edits, deletes, and replaces selections', async () => {
     const dialog = page.getByRole('dialog', { name: 'Session summary' });
     await expect(dialog).toBeVisible();
     await expect(page.getByText(/3 included/)).toBeVisible();
-    await expect(page.getByRole('navigation', { name: 'Saved selections' }).getByText('Context changed')).toHaveCount(3);
+    await expect(
+      page.getByRole('navigation', { name: 'Saved selections' }).getByText("Can't check context"),
+    ).toHaveCount(3);
 
     await expect.poll(() => page.evaluate(() => innerWidth)).toBeGreaterThan(390);
     const dialogBox = await dialog.boundingBox();
@@ -321,6 +324,7 @@ test('reviews, edits, deletes, and replaces selections', async () => {
     await expect
       .poll(async () => (await sessionState(cli.ready.apiUrl)).selections.length)
       .toBe(2);
+    expect(await pathExists(beta.imagePath)).toBe(false);
 
     await page.getByRole('button', { name: /Gamma issue/ }).click();
     await page.getByRole('button', { name: 'Capture again' }).click();
@@ -343,9 +347,7 @@ test('reviews, edits, deletes, and replaces selections', async () => {
     expect(replaced.viewport).toEqual({ preset: 'desktop', width: 1440, height: 900 });
     expect(replaced.scroll).toEqual({ x: 0, y: 0 });
     expect(replaced.imagePath).not.toBe(gamma.imagePath);
-    expect(
-      createHash('sha256').update(await readFile(gamma.imagePath)).digest('hex'),
-    ).toBe(gammaHash);
+    expect(await pathExists(gamma.imagePath)).toBe(false);
     // The replacement reuses the restored capture context and rectangle, so it
     // captures the same pixels as the original even though it is a new file.
     expect(
@@ -362,19 +364,12 @@ test('reviews, edits, deletes, and replaces selections', async () => {
     await expect(finalList.getByText('Alpha issue edited')).toBeVisible();
     await expect(finalList.getByText('Beta issue')).toHaveCount(0);
 
-    await page.getByRole('button', { name: 'Done' }).click();
+    await page.getByRole('button', { name: 'Close' }).click();
     await expect(dialog).toHaveCount(0);
     await expect.poll(() => page.evaluate(() => [innerWidth, innerHeight])).toEqual([1440, 900]);
     await expect.poll(() => page.evaluate(() => [location.pathname, scrollY])).toEqual(['/drifted', 0]);
   } finally {
-    for (const browser of browsers) {
-      await browser.close().catch(() => undefined);
-    }
-    for (const child of children) {
-      await stopCli(child).catch(() => undefined);
-    }
-    await fixture.close();
-    await rm(profileDir, { recursive: true, force: true });
+    await cleanup();
   }
 });
 
@@ -383,8 +378,7 @@ test('saves identical previews of the same element at every viewport', async () 
 
   const fixture = await startFixture(PREVIEW_FIXTURE);
   const profileDir = await mkdtemp(join(tmpdir(), 'pnt-preview-'));
-  const children: ChildProcess[] = [];
-  const browsers: Browser[] = [];
+  const { children, browsers, cleanup } = trackSession(fixture, profileDir);
   const presets = [
     { label: 'desktop', button: /Desktop viewport/, width: 1440, height: 900 },
     { label: 'tablet', button: /Tablet viewport/, width: 768, height: 1024 },
@@ -461,17 +455,10 @@ test('saves identical previews of the same element at every viewport', async () 
     await expect(page.getByRole('dialog', { name: 'Session summary' })).toBeVisible();
     await expect(page.getByText(/3 included/)).toBeVisible();
     await expect(
-      page.getByRole('navigation', { name: 'Saved selections' }).getByText('Context changed'),
+      page.getByRole('navigation', { name: 'Saved selections' }).getByText("Can't check context"),
     ).toHaveCount(0);
   } finally {
-    for (const browser of browsers) {
-      await browser.close().catch(() => undefined);
-    }
-    for (const child of children) {
-      await stopCli(child).catch(() => undefined);
-    }
-    await fixture.close();
-    await rm(profileDir, { recursive: true, force: true });
+    await cleanup();
   }
 });
 
@@ -480,8 +467,7 @@ test('replacing a capture restores its viewport and scroll', async () => {
 
   const fixture = await startFixture(PREVIEW_FIXTURE);
   const profileDir = await mkdtemp(join(tmpdir(), 'pnt-replace-'));
-  const children: ChildProcess[] = [];
-  const browsers: Browser[] = [];
+  const { children, browsers, cleanup } = trackSession(fixture, profileDir);
 
   try {
     const cli = await launchCli({
@@ -545,24 +531,69 @@ test('replacing a capture restores its viewport and scroll', async () => {
       createHash('sha256').update(await readFile(restored.imagePath)).digest('hex'),
     ).toBe(originalHash);
   } finally {
-    for (const browser of browsers) {
-      await browser.close().catch(() => undefined);
-    }
-    for (const child of children) {
-      await stopCli(child).catch(() => undefined);
-    }
-    await fixture.close();
-    await rm(profileDir, { recursive: true, force: true });
+    await cleanup();
   }
 });
 
-test('context warnings are relative to the capture viewport', async () => {
+test('replacing a capture accepts the clamped viewport it recorded', async () => {
+  test.setTimeout(120_000);
+
+  const fixture = await startFixture();
+  const profileDir = await mkdtemp(join(tmpdir(), 'pnt-clamped-'));
+  const { children, browsers, cleanup } = trackSession(fixture, profileDir);
+  const clamped = { preset: 'desktop', width: 1440, height: 798 };
+
+  try {
+    const cli = await launchCli({
+      url: fixture.url,
+      profileDir,
+      sessionId: 'clamped-replace',
+      cdpPort: await freePort(),
+    });
+    children.push(cli.child);
+
+    const browser = await connect(cli.ready.cdpUrl);
+    browsers.push(browser);
+    const page = await appPage(browser, fixture.url);
+
+    // A preset taller than the display is recorded at the size actually applied.
+    const applied = await fetch(`${cli.ready.apiUrl}/viewport`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(clamped),
+    });
+    expect(applied.ok).toBe(true);
+    await expect
+      .poll(async () => (await sessionState(cli.ready.apiUrl)).viewport)
+      .toEqual(clamped);
+
+    await drawSelection(page, 'Clamped capture', [80, 120], [260, 260]);
+
+    await page.getByRole('button', { name: 'Open session summary' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Session summary' });
+    await expect(dialog).toBeVisible();
+    await page.getByRole('button', { name: 'Capture again' }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Save selection' })).toBeVisible();
+    await expect(page.getByText('desktop must be 1440x900')).toHaveCount(0);
+
+    await page.getByRole('button', { name: 'Save selection' }).click();
+    await expect(page.getByRole('button', { name: 'Start annotation' })).toBeVisible();
+
+    const state = await sessionState(cli.ready.apiUrl);
+    expect(state.selections).toHaveLength(1);
+    expect(state.selections[0].viewport).toEqual(clamped);
+  } finally {
+    await cleanup();
+  }
+});
+
+test('context checks are relative to the capture viewport', async () => {
   test.setTimeout(120_000);
 
   const fixture = await startFixture();
   const profileDir = await mkdtemp(join(tmpdir(), 'pnt-context-'));
-  const children: ChildProcess[] = [];
-  const browsers: Browser[] = [];
+  const { children, browsers, cleanup } = trackSession(fixture, profileDir);
 
   try {
     const cli = await launchCli({
@@ -589,30 +620,348 @@ test('context warnings are relative to the capture viewport', async () => {
     const dialog = page.getByRole('dialog', { name: 'Session summary' });
     const list = page.getByRole('navigation', { name: 'Saved selections' });
     await expect(dialog).toBeVisible();
-    await expect(list.getByText('Context changed')).toHaveCount(0);
+    await expect(list.getByText("Can't check context")).toHaveCount(0);
     await expect(dialog.getByRole('status')).toHaveCount(0);
 
-    // Page-level drift still warns, and never reports the viewport itself.
-    await page.getByRole('button', { name: 'Done' }).click();
+    // Scrolling and preset switches do not invalidate a saved capture.
+    await page.getByRole('button', { name: 'Close' }).click();
     await expect(dialog).toHaveCount(0);
     await expect.poll(() => page.evaluate(() => [innerWidth, innerHeight])).toEqual([768, 1024]);
     await page.evaluate(() => window.scrollTo(0, 300));
     await expect.poll(() => page.evaluate(() => scrollY)).toBe(300);
     await page.getByRole('button', { name: 'Open session summary' }).click();
     await expect(dialog).toBeVisible();
-    await expect(list.getByText('Context changed')).toHaveCount(2);
-    const warning = dialog.getByRole('status');
-    await expect(warning).toContainText('Context changed: scroll position.');
-    await expect(warning).not.toContainText('viewport');
+    await expect(list.getByText("Can't check context")).toHaveCount(0);
+    await expect(dialog.getByRole('status')).toHaveCount(0);
+
+    // A different page cannot be compared; the badge says so and no alert shows.
+    await page.getByRole('button', { name: 'Close' }).click();
+    await page.goto(`${fixture.url}/elsewhere`);
+    await page.getByRole('button', { name: 'Open session summary' }).click();
+    await expect(dialog).toBeVisible();
+    await expect(list.getByText("Can't check context")).toHaveCount(2);
+    await expect(list.getByTitle(/different URL/)).toHaveCount(2);
+    await expect(dialog.getByRole('status')).toHaveCount(0);
   } finally {
-    for (const browser of browsers) {
-      await browser.close().catch(() => undefined);
+    await cleanup();
+  }
+});
+
+test('submits included selections with context and keeps artifacts', async () => {
+  test.setTimeout(120_000);
+
+  const fixture = await startFixture(CONTEXT_FIXTURE);
+  const profileDir = await mkdtemp(join(tmpdir(), 'pnt-submit-'));
+  const { children, browsers, cleanup } = trackSession(fixture, profileDir);
+
+  try {
+    const cli = await launchCli({
+      url: fixture.url,
+      profileDir,
+      sessionId: 'submit-flow',
+      cdpPort: await freePort(),
+    });
+    children.push(cli.child);
+
+    const browser = await connect(cli.ready.cdpUrl);
+    browsers.push(browser);
+    const page = await appPage(browser, fixture.url);
+    await page.waitForLoadState('networkidle');
+
+    await drawSelection(page, 'Alpha context', [80, 120], [260, 260]);
+    await drawSelection(page, 'Beta removed', [120, 160], [320, 310]);
+    await drawSelection(page, 'Gamma context', [160, 200], [360, 360]);
+    const beforeDelete = await sessionState(cli.ready.apiUrl);
+
+    await page.getByRole('button', { name: 'Open session summary' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Session summary' });
+    await expect(dialog).toBeVisible();
+    await page.getByRole('button', { name: /Beta removed/ }).click();
+    await page.getByRole('button', { name: 'Delete selection' }).click();
+    await expect(page.getByText(/2 included/)).toBeVisible();
+    expect(await pathExists(beforeDelete.selections[1].imagePath)).toBe(false);
+
+    const redactSwitch = page.getByRole('switch', { name: 'Redact credentials' });
+    await expect(redactSwitch).toHaveAttribute('aria-checked', 'true');
+    const submitResponse = page.waitForResponse((response) => response.url().endsWith('/submit'));
+    await page.getByRole('button', { name: 'Submit' }).click();
+    const response = await submitResponse;
+    expect(response.ok()).toBe(true);
+    await waitForExit(cli.child);
+    const result = JSON.parse(
+      cli.output().split('\n').filter((line) => line.startsWith('{')).at(-1)!,
+    ) as SubmissionResult;
+
+    expect(result.session.sessionRef).toBe(cli.ready.sessionRef);
+    expect(result.selectionCount).toBe(2);
+    expect(result.selectionIds).toEqual(result.selections.map((selection) => selection.selectionId));
+    expect(result.selections.map((selection) => selection.comment)).toEqual([
+      'Alpha context',
+      'Gamma context',
+    ]);
+    expect(result.imagePaths).toEqual(result.selections.map((selection) => selection.imagePath));
+    expect(result.frameIndex).toEqual([]);
+    expect(result.machine.hostname).toBeTruthy();
+    expect(result.artifactsDir).toBe(join(profileDir, 'artifacts', cli.ready.sessionRef));
+    expect(result.retrieval.artifacts).toContain(result.artifactsDir);
+    expect(await pathExists(result.artifactsDir)).toBe(true);
+    expect(await pathExists(join(result.artifactsDir, 'manifest.json'))).toBe(false);
+
+    for (const imagePath of result.imagePaths) {
+      expect(imagePath.startsWith(`${result.artifactsDir}/`)).toBe(true);
+      const image = await readFile(imagePath);
+      expect(image.toString('ascii', 8, 12)).toBe('WEBP');
     }
-    for (const child of children) {
-      await stopCli(child).catch(() => undefined);
+
+    expect(cli.output()).toContain('Alpha context');
+    for (const imagePath of result.imagePaths) {
+      expect(cli.output()).toContain(imagePath);
     }
-    await fixture.close();
-    await rm(profileDir, { recursive: true, force: true });
+    expect(await pathExists(result.contextArtifacts.console)).toBe(true);
+    expect(await pathExists(result.contextArtifacts.network)).toBe(true);
+    const consoleArtifact = JSON.parse(
+      await readFile(result.contextArtifacts.console, 'utf8'),
+    ) as SubmissionResult['context']['console'];
+    const networkArtifact = JSON.parse(
+      await readFile(result.contextArtifacts.network, 'utf8'),
+    ) as SubmissionResult['context']['network'];
+    expect(
+      consoleArtifact.some(
+        (entry) => entry.level === 'error' && entry.text.includes('fixture console error'),
+      ),
+    ).toBe(true);
+    const artifactCall = networkArtifact.find((entry) => entry.url.includes('/api/orders'));
+    expect(artifactCall?.method).toBe('POST');
+    expect(artifactCall?.requestBody).toContain('body-secret');
+    expect(await pathExists(result.contextArtifacts.localStorage)).toBe(true);
+    const storageArtifact = JSON.parse(
+      await readFile(result.contextArtifacts.localStorage, 'utf8'),
+    ) as Record<string, string>;
+    expect(storageArtifact['pnt-token']).toBe('[REDACTED]');
+    expect(storageArtifact['pnt-theme']).toBe('light');
+
+    expect(
+      result.context.console.some(
+        (entry) => entry.level === 'error' && entry.text.includes('fixture console error'),
+      ),
+    ).toBe(true);
+    expect(
+      result.context.console.some(
+        (entry) => entry.level === 'warning' && entry.text.includes('fixture console warning'),
+      ),
+    ).toBe(true);
+
+    const apiCall = result.context.network.find((entry) => entry.url.includes('/api/orders'));
+    expect(apiCall).toBeTruthy();
+    expect(apiCall!.method).toBe('POST');
+    expect(apiCall!.requestHeaders.authorization).toBe('[REDACTED]');
+    expect(apiCall!.responseHeaders['x-api-key']).toBe('[REDACTED]');
+    expect(apiCall!.url).not.toContain('url-secret');
+    expect(apiCall!.requestBody).toContain('body-secret');
+    expect(apiCall!.responseBody).toContain('response-secret');
+
+    expect(result.context.storage.localStorage['pnt-token']).toBe('[REDACTED]');
+    expect(result.context.storage.localStorage['pnt-theme']).toBe('light');
+    expect(result.context.storage.sessionStorage['pnt-api-key']).toBe('[REDACTED]');
+    expect(result.context.storage.cookies.find((cookie) => cookie.name === 'pnt-auth')?.value).toBe(
+      '[REDACTED]',
+    );
+    expect(result.context.accessibility).toContain('PNT Context Fixture');
+    expect(result.context.redactCredentials).toBe(true);
+
+    expect(await pathExists(result.artifactsDir)).toBe(true);
+    expect(await pathExists(join(result.artifactsDir, 'manifest.json'))).toBe(false);
+  } finally {
+    await cleanup();
+  }
+});
+
+test('redaction toggle off submits raw context values', async () => {
+  test.setTimeout(120_000);
+
+  const fixture = await startFixture(CONTEXT_FIXTURE);
+  const profileDir = await mkdtemp(join(tmpdir(), 'pnt-submit-raw-'));
+  const { children, browsers, cleanup } = trackSession(fixture, profileDir);
+
+  try {
+    const cli = await launchCli({
+      url: fixture.url,
+      profileDir,
+      sessionId: 'submit-raw',
+      cdpPort: await freePort(),
+    });
+    children.push(cli.child);
+
+    const browser = await connect(cli.ready.cdpUrl);
+    browsers.push(browser);
+    const page = await appPage(browser, fixture.url);
+    await page.waitForLoadState('networkidle');
+    await drawSelection(page, 'Raw context', [80, 120], [260, 260]);
+
+    await page.getByRole('button', { name: 'Open session summary' }).click();
+    await expect(page.getByRole('dialog', { name: 'Session summary' })).toBeVisible();
+    await page.getByRole('switch', { name: 'Redact credentials' }).click();
+    const submitResponse = page.waitForResponse((response) => response.url().endsWith('/submit'));
+    await page.getByRole('button', { name: 'Submit' }).click();
+    expect((await submitResponse).ok()).toBe(true);
+    await waitForExit(cli.child);
+    const result = JSON.parse(
+      cli.output().split('\n').filter((line) => line.startsWith('{')).at(-1)!,
+    ) as SubmissionResult;
+
+    expect(result.context.redactCredentials).toBe(false);
+    const storageArtifact = JSON.parse(
+      await readFile(result.contextArtifacts.localStorage, 'utf8'),
+    ) as Record<string, string>;
+    expect(storageArtifact['pnt-token']).toBe('storage-secret');
+    const apiCall = result.context.network.find((entry) => entry.url.includes('/api/orders'));
+    expect(apiCall).toBeTruthy();
+    expect(apiCall!.requestHeaders.authorization).toBe('Bearer header-secret');
+    expect(apiCall!.responseHeaders['x-api-key']).toBe('response-secret');
+    expect(apiCall!.url).toContain('url-secret');
+    expect(result.context.storage.localStorage['pnt-token']).toBe('storage-secret');
+    expect(result.context.storage.sessionStorage['pnt-api-key']).toBe('session-secret');
+    expect(result.context.storage.cookies.find((cookie) => cookie.name === 'pnt-auth')?.value).toBe(
+      'seeded',
+    );
+  } finally {
+    await cleanup();
+  }
+});
+
+test('discards a session and deletes its artifacts', async () => {
+  test.setTimeout(120_000);
+
+  const fixture = await startFixture();
+  const profileDir = await mkdtemp(join(tmpdir(), 'pnt-discard-'));
+  const { children, browsers, cleanup } = trackSession(fixture, profileDir);
+
+  try {
+    const cli = await launchCli({
+      url: fixture.url,
+      profileDir,
+      sessionId: 'discard-flow',
+      cdpPort: await freePort(),
+    });
+    children.push(cli.child);
+
+    const browser = await connect(cli.ready.cdpUrl);
+    browsers.push(browser);
+    const page = await appPage(browser, fixture.url);
+    await drawSelection(page, 'Discard this', [80, 120], [260, 260]);
+
+    const artifactsDir = join(profileDir, 'artifacts', cli.ready.sessionRef);
+    expect(await pathExists(artifactsDir)).toBe(true);
+
+    await page.getByRole('button', { name: 'Open session summary' }).click();
+    await expect(page.getByRole('dialog', { name: 'Session summary' })).toBeVisible();
+    await page.getByRole('button', { name: 'Discard', exact: true }).click();
+    await page.getByRole('button', { name: 'Confirm discard' }).click();
+
+    await waitForExit(cli.child);
+    expect(await pathExists(artifactsDir)).toBe(false);
+  } finally {
+    await cleanup();
+  }
+});
+
+test('browser disconnect deletes unsubmitted artifacts', async () => {
+  test.setTimeout(120_000);
+
+  const fixture = await startFixture();
+  const profileDir = await mkdtemp(join(tmpdir(), 'pnt-disconnect-'));
+  const { children, browsers, cleanup } = trackSession(fixture, profileDir);
+
+  try {
+    const cli = await launchCli({
+      url: fixture.url,
+      profileDir,
+      sessionId: 'disconnect-flow',
+      cdpPort: await freePort(),
+    });
+    children.push(cli.child);
+
+    const browser = await connect(cli.ready.cdpUrl);
+    browsers.push(browser);
+    const page = await appPage(browser, fixture.url);
+    await drawSelection(page, 'Disconnect this', [80, 120], [260, 260]);
+
+    const artifactsDir = join(profileDir, 'artifacts', cli.ready.sessionRef);
+    expect(await pathExists(artifactsDir)).toBe(true);
+
+    await page.close();
+    await waitForExit(cli.child);
+    expect(await pathExists(artifactsDir)).toBe(false);
+  } finally {
+    await cleanup();
+  }
+});
+
+test('CLI cancellation deletes unsubmitted artifacts', async () => {
+  test.setTimeout(120_000);
+
+  const fixture = await startFixture();
+  const profileDir = await mkdtemp(join(tmpdir(), 'pnt-cancel-'));
+  const { children, browsers, cleanup } = trackSession(fixture, profileDir);
+
+  try {
+    const cli = await launchCli({
+      url: fixture.url,
+      profileDir,
+      sessionId: 'cancel-flow',
+      cdpPort: await freePort(),
+    });
+    children.push(cli.child);
+
+    const browser = await connect(cli.ready.cdpUrl);
+    browsers.push(browser);
+    const page = await appPage(browser, fixture.url);
+    await drawSelection(page, 'Cancel this', [80, 120], [260, 260]);
+
+    const artifactsDir = join(profileDir, 'artifacts', cli.ready.sessionRef);
+    expect(await pathExists(artifactsDir)).toBe(true);
+
+    await stopCli(cli.child);
+    expect(await pathExists(artifactsDir)).toBe(false);
+  } finally {
+    await cleanup();
+  }
+});
+
+test('CLI invocation cleans up artifacts older than one month', async () => {
+  test.setTimeout(120_000);
+
+  const fixture = await startFixture();
+  const profileDir = await mkdtemp(join(tmpdir(), 'pnt-cleanup-'));
+  const { children, browsers, cleanup } = trackSession(fixture, profileDir);
+  const root = join(profileDir, 'artifacts');
+  const expired = join(root, 'kilo__old__crash');
+  const fresh = join(root, 'kilo__fresh__crash');
+  const oldDate = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000);
+
+  try {
+    await mkdir(expired, { recursive: true });
+    await writeFile(join(expired, 'selection.webp'), 'old');
+    await utimes(expired, oldDate, oldDate);
+    await mkdir(fresh, { recursive: true });
+    await writeFile(join(fresh, 'selection.webp'), 'fresh');
+
+    const cli = await launchCli({
+      url: fixture.url,
+      profileDir,
+      sessionId: 'cleanup-run',
+      cdpPort: await freePort(),
+    });
+    children.push(cli.child);
+
+    expect(await pathExists(expired)).toBe(false);
+    expect(await pathExists(fresh)).toBe(true);
+
+    const browser = await connect(cli.ready.cdpUrl);
+    browsers.push(browser);
+    await appPage(browser, fixture.url);
+  } finally {
+    await cleanup();
   }
 });
 
@@ -636,4 +985,258 @@ test('help documents the CLI surface', async () => {
   expect(stdout).toContain('--chat-title');
   expect(stdout).toContain('--session-id');
   expect(stdout).toContain('viewport is selected in the Point and Tell overlay');
+});
+
+test('restores bottom-of-page captures across presets', async () => {
+  test.setTimeout(120_000);
+
+  const fixture = await startFixture(SCROLL_FIXTURE);
+  const profileDir = await mkdtemp(join(tmpdir(), 'pnt-bottom-'));
+  const { children, browsers, cleanup } = trackSession(fixture, profileDir);
+
+  try {
+    const cli = await launchCli({
+      url: fixture.url,
+      profileDir,
+      sessionId: 'bottom-edge',
+      cdpPort: await freePort(),
+    });
+    children.push(cli.child);
+
+    const browser = await connect(cli.ready.cdpUrl);
+    browsers.push(browser);
+    const page = await appPage(browser, fixture.url);
+
+    await page.getByRole('button', { name: /Mobile viewport/ }).click();
+    await expect.poll(() => page.evaluate(() => [innerWidth, innerHeight])).toEqual([390, 844]);
+
+    const bottom = await page.evaluate(() => document.documentElement.scrollHeight - innerHeight);
+    await page.evaluate((y) => window.scrollTo(0, y), bottom);
+    await expect.poll(() => page.evaluate(() => scrollY)).toBe(bottom);
+
+    const box = await page.locator('#bottom-target').boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.y).toBeGreaterThanOrEqual(0);
+    expect(box!.y + box!.height).toBeLessThanOrEqual(844);
+
+    await drawSelection(
+      page,
+      'Bottom target at mobile',
+      [box!.x, box!.y],
+      [box!.x + box!.width, box!.y + box!.height],
+    );
+
+    const [original] = (await sessionState(cli.ready.apiUrl)).selections;
+    expect(original.viewport).toEqual({ preset: 'mobile', width: 390, height: 844 });
+    expect(original.scroll).toEqual({ x: 0, y: bottom });
+    const originalHash = createHash('sha256')
+      .update(await readFile(original.imagePath))
+      .digest('hex');
+
+    await page.getByRole('button', { name: /Desktop viewport/ }).click();
+    await expect.poll(() => page.evaluate(() => [innerWidth, innerHeight])).toEqual([1440, 900]);
+    await page.getByRole('button', { name: 'Open session summary' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Session summary' });
+    await expect(dialog).toBeVisible();
+    await expect(
+      page.getByRole('navigation', { name: 'Saved selections' }).getByText("Can't check context"),
+    ).toHaveCount(0);
+    await saveScreenshot(page, 'scroll-restore-edge.png');
+
+    await page.getByRole('button', { name: 'Capture again' }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect.poll(() => page.evaluate(() => [innerWidth, innerHeight])).toEqual([390, 844]);
+    await expect.poll(() => page.evaluate(() => scrollY)).toBe(bottom);
+    await expect(page.getByRole('button', { name: 'Save selection' })).toBeVisible();
+
+    await page.getByRole('button', { name: 'Save selection' }).click();
+    await expect(page.getByRole('button', { name: 'Start annotation' })).toBeVisible();
+
+    const state = await sessionState(cli.ready.apiUrl);
+    expect(state.selections).toHaveLength(1);
+    const restored = state.selections[0];
+    expect(restored.viewport).toEqual(original.viewport);
+    expect(restored.scroll).toEqual(original.scroll);
+    expect(restored.coordinates).toEqual(original.coordinates);
+    expect(
+      createHash('sha256').update(await readFile(restored.imagePath)).digest('hex'),
+    ).toBe(originalHash);
+  } finally {
+    await cleanup();
+  }
+});
+
+test('blocks empty submits and rejects malformed session input', async () => {
+  test.setTimeout(120_000);
+
+  const fixture = await startFixture();
+  const profileDir = await mkdtemp(join(tmpdir(), 'pnt-empty-'));
+  const { children, browsers, cleanup } = trackSession(fixture, profileDir);
+
+  try {
+    const cli = await launchCli({
+      url: fixture.url,
+      profileDir,
+      sessionId: 'empty-edge',
+      cdpPort: await freePort(),
+    });
+    children.push(cli.child);
+
+    const browser = await connect(cli.ready.cdpUrl);
+    browsers.push(browser);
+    const page = await appPage(browser, fixture.url);
+
+    await drawSelection(page, 'Only selection', [80, 120], [260, 260]);
+    const [saved] = (await sessionState(cli.ready.apiUrl)).selections;
+
+    await page.getByRole('button', { name: 'Open session summary' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Session summary' });
+    await expect(dialog).toBeVisible();
+    await page.getByRole('button', { name: 'Delete selection' }).click();
+    await expect(dialog.getByText('No selections remain.')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Submit' })).toBeDisabled();
+    await expect(page.getByText('No selection selected.')).toBeVisible();
+    await saveScreenshot(page, 'empty-review-edge.png');
+
+    const api = cli.ready.apiUrl;
+    const post = (path: string, body: unknown, raw = false) =>
+      fetch(`${api}${path}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: raw ? (body as string) : JSON.stringify(body),
+      });
+    const valid = [
+      { x: 10, y: 10 },
+      { x: 60, y: 10 },
+      { x: 60, y: 60 },
+      { x: 10, y: 60 },
+    ];
+
+    expect((await post('/viewport', { preset: 'watch', width: 100, height: 100 })).status).toBe(400);
+    expect((await post('/selection', { comment: '', coordinates: valid })).status).toBe(400);
+    expect(
+      (await post('/selection', { comment: 'x'.repeat(5001), coordinates: valid })).status,
+    ).toBe(400);
+    expect(
+      (
+        await post('/selection', {
+          comment: 'Skewed',
+          coordinates: [valid[0], { x: 60, y: 5 }, valid[2], valid[3]],
+        })
+      ).status,
+    ).toBe(400);
+    expect((await post('/selection', '{', true)).status).toBe(400);
+    expect((await fetch(`${api}/selection/unknown/image`)).status).toBe(400);
+    expect(
+      (
+        await fetch(`${api}/selection/unknown`, {
+          method: 'PATCH',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ comment: 'Ghost' }),
+        })
+      ).status,
+    ).toBe(400);
+    const emptySubmit = await post('/submit', {});
+    expect(emptySubmit.status).toBe(400);
+    expect(((await emptySubmit.json()) as { error: string }).error).toMatch(/at least one selection/);
+    expect((await fetch(`${api}/state`)).ok).toBe(true);
+    expect(await pathExists(saved.imagePath)).toBe(false);
+
+    await page.getByRole('button', { name: 'Discard', exact: true }).click();
+    await page.getByRole('button', { name: 'Cancel' }).click();
+    await expect(page.getByRole('button', { name: 'Submit' })).toBeVisible();
+    await page.getByRole('button', { name: 'Discard', exact: true }).click();
+    await page.getByRole('button', { name: 'Confirm discard' }).click();
+    await waitForExit(cli.child);
+
+    expect(await pathExists(join(profileDir, 'artifacts', cli.ready.sessionRef))).toBe(false);
+  } finally {
+    await cleanup();
+  }
+});
+
+test('redacts credential variants in storage, URLs, and headers', async () => {
+  test.setTimeout(120_000);
+
+  const fixture = await startFixture(SECRETS_FIXTURE);
+  const profileDir = await mkdtemp(join(tmpdir(), 'pnt-secrets-'));
+  const { children, browsers, cleanup } = trackSession(fixture, profileDir);
+
+  try {
+    const cli = await launchCli({
+      url: fixture.url,
+      profileDir,
+      sessionId: 'secrets-edge',
+      cdpPort: await freePort(),
+    });
+    children.push(cli.child);
+
+    const browser = await connect(cli.ready.cdpUrl);
+    browsers.push(browser);
+    const page = await appPage(browser, fixture.url);
+    await page.waitForLoadState('networkidle');
+
+    await drawSelection(page, 'First page capture', [80, 120], [260, 260]);
+    await page.goto(`${fixture.url}/second`, { waitUntil: 'domcontentloaded' });
+    await expect(page.getByRole('region', { name: 'Point and Tell toolbar' })).toBeVisible();
+    await drawSelection(page, 'Second page capture', [100, 140], [280, 280]);
+
+    await page.getByRole('button', { name: 'Open session summary' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Session summary' });
+    await expect(dialog).toBeVisible();
+    const list = page.getByRole('navigation', { name: 'Saved selections' });
+    await expect(list.getByText('First page capture')).toBeVisible();
+    await expect(list.getByText("Can't check context")).toHaveCount(1);
+    await saveScreenshot(page, 'redaction-edge.png');
+
+    const submitResponse = page.waitForResponse((response) => response.url().endsWith('/submit'));
+    await page.getByRole('button', { name: 'Submit' }).click();
+    expect((await submitResponse).ok()).toBe(true);
+    await waitForExit(cli.child);
+    const result = JSON.parse(
+      cli.output().split('\n').filter((line) => line.startsWith('{')).at(-1)!,
+    ) as SubmissionResult;
+
+    expect(result.selectionCount).toBe(2);
+    expect(result.context.redactCredentials).toBe(true);
+
+    const localStorage = result.context.storage.localStorage;
+    expect(localStorage.AUTHORIZATION).toBe('[REDACTED]');
+    expect(localStorage.password_hash).toBe('[REDACTED]');
+    expect(localStorage.clientSecret).toBe('[REDACTED]');
+    expect(localStorage['pnt-api-key']).toBe('[REDACTED]');
+    expect(localStorage.theme).toBe('dark');
+    expect(result.context.storage.sessionStorage.SESSION_ID).toBe('[REDACTED]');
+    expect(result.context.storage.sessionStorage.featureFlags).toBe('beta');
+    for (const cookie of result.context.storage.cookies) {
+      expect(cookie.value).toBe('[REDACTED]');
+    }
+
+    const call = result.context.network.find((entry) => entry.url.includes('/api/secrets'))!;
+    expect(call).toBeTruthy();
+    const url = new URL(call.url);
+    expect(url.searchParams.get('token')).toBe('[REDACTED]');
+    expect(url.searchParams.get('api_key')).toBe('[REDACTED]');
+    expect(url.searchParams.get('keep')).toBe('visible');
+    expect(call.requestHeaders.authorization).toBe('[REDACTED]');
+    expect(call.requestHeaders['x-session-id']).toBe('[REDACTED]');
+    expect(call.requestHeaders.accept).toBeTruthy();
+    expect(call.responseHeaders['x-api-key']).toBe('[REDACTED]');
+
+    const storageArtifact = JSON.parse(
+      await readFile(result.contextArtifacts.localStorage, 'utf8'),
+    ) as Record<string, string>;
+    expect(storageArtifact).toEqual(localStorage);
+    const networkArtifact = JSON.parse(
+      await readFile(result.contextArtifacts.network, 'utf8'),
+    ) as SubmissionResult['context']['network'];
+    const artifactCall = networkArtifact.find((entry) => entry.url.includes('/api/secrets'))!;
+    expect(artifactCall.url).not.toContain('query-secret');
+    expect(artifactCall.url).toContain('keep=visible');
+    for (const imagePath of result.imagePaths) {
+      expect(await pathExists(imagePath)).toBe(true);
+    }
+  } finally {
+    await cleanup();
+  }
 });

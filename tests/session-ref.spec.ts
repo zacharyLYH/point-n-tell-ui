@@ -51,7 +51,7 @@ test('empty session parts are rejected', () => {
   ).toThrow(/session-id/);
 });
 
-test('viewport validation keeps named presets stable', () => {
+test('viewport validation accepts a preset at its applied size', () => {
   expect(parseViewport({ preset: 'desktop', width: 1440, height: 900 })).toEqual({
     preset: 'desktop',
     width: 1440,
@@ -65,9 +65,13 @@ test('viewport validation keeps named presets stable', () => {
   expect(parseViewport({ preset: 'tablet', width: 768, height: 1024 }).preset).toBe(
     'tablet',
   );
-  expect(() =>
-    parseViewport({ preset: 'desktop', width: 768, height: 1024 }),
-  ).toThrow(/desktop/);
+  // A short display clamps a preset; the applied size is still that preset.
+  expect(parseViewport({ preset: 'desktop', width: 1440, height: 798 })).toEqual({
+    preset: 'desktop',
+    width: 1440,
+    height: 798,
+  });
+  expect(() => parseViewport({ preset: 'phone', width: 400, height: 800 })).toThrow(/preset/);
   expect(() =>
     parseViewport({ preset: 'custom', width: 0, height: 720 }),
   ).toThrow(/positive integers/);

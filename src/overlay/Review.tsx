@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
-import { Camera, PencilLine, Trash2 } from 'lucide-react';
-import type { ReviewContext, Selection, SessionState } from '../types.js';
+import { Camera, PencilLine, Send, Trash2 } from 'lucide-react';
+import type { ReviewContext, Selection, SessionState, SubmissionResult } from '../types.js';
 import { sendJson, useAction } from './api.js';
 import { Alert } from '../components/ui/alert.js';
 import { Badge } from '../components/ui/badge.js';
@@ -8,23 +8,9 @@ import { Button } from '../components/ui/button.js';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '../components/ui/dialog.js';
 import { Label } from '../components/ui/label.js';
 import { Separator } from '../components/ui/separator.js';
+import { Switch } from '../components/ui/switch.js';
 import { Textarea } from '../components/ui/textarea.js';
 import { cn } from '../lib/utils.js';
-
-// A capture is judged against the viewport it was taken in, not the app's
-// current one: switching presets is how the user captures a page, so a capture
-// made at another preset is still faithful to its context. Only page-level
-// drift (URL or scroll) invalidates it.
-function changedValues(selection: Selection, context: ReviewContext): string[] {
-  const changes: string[] = [];
-  if (selection.page.url !== context.url) {
-    changes.push('URL');
-  }
-  if (selection.scroll.x !== context.scroll.x || selection.scroll.y !== context.scroll.y) {
-    changes.push('scroll position');
-  }
-  return changes;
-}
 
 export function Review({
   apiUrl,
@@ -42,6 +28,8 @@ export function Review({
   const [state, setState] = useState(initial);
   const [requestedId, setRequestedId] = useState(initial.selections[0]?.selectionId);
   const [draft, setDraft] = useState<{ id?: string; text: string }>();
+  const [redactCredentials, setRedactCredentials] = useState(true);
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
   const { busy, error, run } = useAction();
   const navRef = useRef<HTMLElement>(null);
 
@@ -58,6 +46,12 @@ export function Review({
       setState(await sendJson<SessionState>(`${apiUrl}${path}`, body, method));
     });
 
+  // The submit response ends the session server-side; the CLI closes the
+  // browser after the manifest has been written.
+  const submit = () =>
+    void run(() => sendJson<SubmissionResult>(`${apiUrl}/submit`, { redactCredentials }));
+  const discard = () => void run(() => sendJson(`${apiUrl}/discard`));
+
   const moveSelection = (delta: number) => {
     const next = state.selections[index + delta];
     if (!next) {
@@ -70,8 +64,6 @@ export function Review({
       });
     }
   };
-
-  const changes = selected ? changedValues(selected, context) : [];
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
@@ -91,16 +83,68 @@ export function Review({
       >
         <DialogTitle className="sr-only">Session summary</DialogTitle>
         <DialogDescription className="sr-only">Review saved selections before submitting.</DialogDescription>
-        <header className="flex items-center gap-2 px-3 py-2">
+        <header className="flex flex-wrap items-center gap-2 px-3 py-2">
           <div className="min-w-0 flex-1">
             <h1 className="truncate text-sm font-semibold">{state.session.chatTitle}</h1>
             <p className="truncate text-[11px] text-muted-foreground">
               {state.selections.length} included · {state.session.sessionRef}
             </p>
           </div>
-          <Button type="button" size="sm" onClick={onClose}>
-            Done
-          </Button>
+          <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+            <Switch
+              id="pnt-redact-credentials"
+              aria-label="Redact credentials"
+              checked={redactCredentials}
+              disabled={busy}
+              onCheckedChange={setRedactCredentials}
+            />
+            <Label htmlFor="pnt-redact-credentials" className="text-[11px] text-muted-foreground">
+              Redact credentials
+            </Label>
+          </div>
+          {confirmDiscard ? (
+            <>
+              <span className="text-[11px] text-muted-foreground">
+                Discard session and delete captures?
+              </span>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={busy}
+                onClick={() => setConfirmDiscard(false)}
+              >
+                Cancel
+              </Button>
+              <Button type="button" variant="destructive" size="sm" disabled={busy} onClick={discard}>
+                Confirm discard
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button type="button" variant="outline" size="sm" disabled={busy} onClick={onClose}>
+                Close
+              </Button>
+              <Button
+                type="button"
+                variant="destructive"
+                size="sm"
+                disabled={busy}
+                onClick={() => setConfirmDiscard(true)}
+              >
+                Discard
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                disabled={busy || state.selections.length === 0}
+                onClick={submit}
+              >
+                <Send aria-hidden="true" />
+                Submit
+              </Button>
+            </>
+          )}
         </header>
         <Separator />
 
@@ -111,7 +155,8 @@ export function Review({
             className="flex flex-col gap-1 border-b p-2 lg:overflow-y-auto lg:border-b-0 lg:border-r"
           >
             {state.selections.map((item, itemIndex) => {
-              const itemChanges = changedValues(item, context);
+              // A capture from another page cannot be compared at all.
+              const otherUrl = item.page.url !== context.url;
               const active = item.selectionId === selectedId;
               return (
                 <Button
@@ -136,7 +181,12 @@ export function Review({
                     <span className="block truncate text-[11px] text-muted-foreground">{item.comment}</span>
                     <span className="mt-1 flex flex-wrap gap-1">
                       <Badge variant="secondary">Included</Badge>
-                      {itemChanges.length > 0 && <Badge variant="outline">Context changed</Badge>}
+                      {otherUrl && (
+                        <Badge
+                          variant="outline"
+                          title="Can't check if context changed: this capture is from a different URL"
+                        >Can't check context</Badge>
+                      )}
                     </span>
                   </span>
                 </Button>
@@ -205,18 +255,6 @@ export function Review({
                     </div>
                   </div>
 
-                  {changes.length > 0 && (
-                    <Alert variant="warning" role="status">
-                      <strong className="font-semibold">Context changed: {changes.join(', ')}.</strong>
-                      <div className="mt-1 break-all">
-                        Captured {selected.viewport.preset} · {selected.viewport.width} ×{' '}
-                        {selected.viewport.height}, scroll {selected.scroll.x}, {selected.scroll.y}.
-                      </div>
-                      <div className="break-all">
-                        Current {context.url} · scroll {context.scroll.x}, {context.scroll.y}.
-                      </div>
-                    </Alert>
-                  )}
                   {error && <Alert variant="destructive">{error}</Alert>}
                 </div>
 

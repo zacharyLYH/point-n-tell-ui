@@ -15,7 +15,7 @@ npm ci
 ./scripts/demo.sh
 ```
 
-The script builds Point and Tell, starts a local sample checkout app, then launches the CLI. The final step is a headed Chromium window showing the sample app with the Point and Tell overlay. Try changing viewports, annotating the order summary, applying `NORTHSTAR10`, or refreshing the delivery estimate. Press **Ctrl+C** in the terminal to close Chromium and stop the sample server; the demo's temporary Chromium profile and saved artifacts are removed on exit. Set `PNT_DEMO_PORT` to use a different local port if `4173` is occupied.
+The script builds Point and Tell, starts a local sample checkout app, then launches the CLI. The final step is a headed Chromium window showing the sample app with the Point and Tell overlay. The sample app has a small SQLite-backed cart/order API, session cookie, request headers, console events, and localStorage credentials so you can exercise capture context and redaction. Try changing viewports, annotating the order summary, applying `NORTHSTAR10`, editing the cart, or placing an order. Press **Ctrl+C** in the terminal to close Chromium and stop the sample server. Its Chromium profile and saved artifacts under the printed `.demo-state/` directory are kept after exit so you can inspect them; the sample SQLite database stays in the temporary directory. The state directory is gitignored, and each run starts from a clean slate. Set `PNT_DEMO_PORT` to use a different local port if `4173` is occupied.
 
 ## Run tests
 
@@ -42,19 +42,19 @@ Baselines live in `tests/screenshots/` and are committed. Runs use Playwright's 
   - The comment stays editable metadata.
 - **Session summary:** open the summary sheet on demand to review all saved selections and recording diagnostics before submitting.
   - Each selection shows its screenshot, comment, and annotation, with **Edit** and **Delete** actions. Edit the comment directly; replace or recreate a selection to change its rectangle or strokes.
-  - Warn if the current URL, viewport size, or scroll position differs from a capture.
+  - Captures taken on a different URL are marked **Can't check context** in the selection list. Scrolling or switching viewports does not invalidate a saved screenshot.
   - Automatically redact recognized credentials, including cookies and authorization headers. A **Redact credentials** toggle is on by default.
   - Request and response bodies are not scanned for credentials; credentials in bodies may remain visible.
-- **Submit:** the summary sheet submits all included selections and session data as a batch. Submitted artifacts remain available until the one-month retention cleanup.
+- **Submit:** the summary sheet submits all included selections and session data as a batch. The manifest prints to CLI stdout; submitted images remain available until the one-month retention cleanup.
 
 ## Capture payload
 
-Submissions contain metadata and file paths, not inline image bytes.
+Submissions contain metadata and file paths, not inline image bytes. No manifest file is written; the manifest is printed by the CLI.
 
 - **Per selection:** `selectionId`, `comment`, `coordinates`, `viewport`, `scroll`, `page` (including URL), `createdAt`, and `imagePath`.
   - Coordinates are viewport CSS pixels in TL, TR, BR, BL order.
   - The screenshot is the source of truth; later page changes do not alter it.
-- **Session context:** `harnessSessionRef` (when provided), console errors/warnings, timestamped app API requests/responses, accessibility snapshot, origin storage/SQLite metadata where practical, and session diagnostics.
+- **Session context:** session ref, console errors/warnings, timestamped app XHR/fetch requests/responses, ARIA accessibility snapshot, origin `localStorage`/`sessionStorage`, cookies, IndexedDB database names, and session diagnostics.
   - Static assets and bundles are excluded.
   - Recognized credential values are redacted by default, except within request and response bodies, which are not scanned.
 
@@ -63,8 +63,8 @@ Agents can read images from `imagePath` and request a follow-up capture through 
 ## Session and storage
 
 - **Session ref:** the agent must provide the harness name and chat title. A session ID is optional; Point and Tell generates one if omitted. The resulting filesystem-safe ref (e.g. `kilo__checkout-bug__abc123`) scopes API access, artifacts, and operations.
-- **Artifacts:** session-scoped WebP screenshots and sampled frames; payloads reference local `imagePath`s.
-- **CLI output:** prints the session ref, app URL, overlay URL, and the session's screenshot directory. Set `PNT_MACHINE=1` for a JSON line an agent can parse.
+- **Artifacts:** one session directory holding the WebP screenshots plus `console.json`, `network.json`, and `localstorage.json` with the full console, network, and localStorage payloads; request/response bodies included. Payloads reference local paths.
+- **CLI output:** prints the session ref, app URL, overlay URL, and artifact directory. Set `PNT_MACHINE=1` for JSON lines an agent can parse. On submit it prints a session header, then one section per selection with its comment, image path, page, and viewport, then the full manifest as the final JSON line; the session then closes.
 - **Session API:** the CLI starts an ephemeral `127.0.0.1` API, launches or attaches Chrome, and injects overlay configuration. The overlay uses the API for selection state and rehydration; it cannot access disk.
 - **Open session:** persists through refresh and navigation until submit, discard, CLI exit, or browser disconnect.
 - **Concurrency:** multiple sessions are supported; operations target an explicit session ref.
@@ -73,7 +73,7 @@ Agents can read images from `imagePath` and request a follow-up capture through 
 
 | Outcome | Agent payload | Session artifacts |
 |---|---|---|
-| **Submit** | Batched manifest | Kept until one-month expiry |
+| **Submit** | Manifest on CLI stdout | Images kept until one-month expiry |
 | **Discard** | None | Deleted |
 | **Browser disconnect / CLI cancel** | None | Deleted |
 | **Hard kill / crash** | None | May remain until cleanup |
@@ -82,7 +82,7 @@ On CLI invocation, background cleanup removes artifacts older than one month.
 
 ### Response
 
-The batch response includes the session ref, machine/session metadata, selection IDs and count, size estimate, image paths, frame index, and retrieval commands.
+The submit manifest includes the session ref, machine/session metadata, selection IDs and count, image paths, frame index, session context, paths to `console.json`, `network.json`, and `localstorage.json`, and a command that lists the artifact directory. It is printed to CLI stdout; agents read images from each `imagePath` and the full payloads from the JSON files.
 
 ## Viewport and device checks
 

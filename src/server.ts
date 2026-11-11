@@ -7,6 +7,7 @@ import {
   type ReviewContext,
   type Selection,
   type SessionState,
+  type SubmissionResult,
   type ViewportSpec,
 } from './types.js';
 
@@ -21,10 +22,13 @@ type SessionApi = {
   deleteSelection: (selectionId: string) => Promise<SessionState>;
   openReview: () => Promise<{ state: SessionState; context: ReviewContext }>;
   closeReview: () => Promise<SessionState>;
+  submit: (options: { redactCredentials: boolean }) => Promise<SubmissionResult>;
+  discard: () => Promise<{ discarded: true }>;
+  endSession: () => void;
 };
 
-function send(res: ServerResponse, status: number, body: unknown): void {
-  res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(body));
+function send(res: ServerResponse, status: number, body: unknown, after?: () => void): void {
+  res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(body), after);
 }
 
 async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
@@ -51,10 +55,8 @@ export function parseViewport(value: unknown): ViewportSpec {
   if (!Number.isInteger(w) || !Number.isInteger(h) || w <= 0 || h <= 0) {
     throw new Error('width and height must be positive integers');
   }
-  if (named && (PRESETS[named].width !== w || PRESETS[named].height !== h)) {
-    throw new Error(`${named} must be ${PRESETS[named].width}x${PRESETS[named].height}`);
-  }
-
+  // A named preset records the size the window could actually show, which can
+  // be smaller than the preset when the display is short.
   return { preset: preset as ViewportSpec['preset'], width: w, height: h };
 }
 
@@ -73,10 +75,10 @@ function parseSelection(value: unknown): Pick<Selection, 'comment' | 'coordinate
   }
   const points = coordinates.map((corner): Point => {
     const { x, y } = (corner ?? {}) as Record<string, unknown>;
-    if (typeof x !== 'number' || typeof y !== 'number' || !Number.isFinite(x) || !Number.isFinite(y)) {
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
       throw new Error('Selection coordinates must be finite numbers');
     }
-    return { x, y };
+    return { x, y } as Point;
   }) as Coordinates;
   const [topLeft, topRight, bottomRight, bottomLeft] = points;
   const axisAligned =
@@ -125,6 +127,15 @@ export async function startServer(
           return send(res, 200, await api.openReview());
         case 'POST /review/close':
           return send(res, 200, await api.closeReview());
+        case 'POST /submit':
+          return send(
+            res,
+            200,
+            await api.submit({ redactCredentials: body.redactCredentials !== false }),
+            api.endSession,
+          );
+        case 'POST /discard':
+          return send(res, 200, await api.discard(), api.endSession);
       }
 
       if (selectionId) {

@@ -1,5 +1,6 @@
 import { chromium, expect, type Browser, type Page } from '@playwright/test';
 import { spawn, type ChildProcess } from 'node:child_process';
+import { access, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { ROOT } from './paths.js';
 import type { SessionState } from '../../src/types.js';
@@ -15,7 +16,7 @@ export async function launchCli(options: {
   profileDir: string;
   sessionId: string;
   cdpPort: number;
-}): Promise<{ child: ChildProcess; ready: Ready }> {
+}): Promise<{ child: ChildProcess; ready: Ready; output: () => string }> {
   const child = spawn(
     process.execPath,
     [
@@ -41,37 +42,46 @@ export async function launchCli(options: {
     },
   );
 
+  let stdout = '';
   let stderr = '';
+  child.stdout?.on('data', (chunk: Buffer) => {
+    stdout += chunk.toString();
+  });
   child.stderr?.on('data', (chunk: Buffer) => {
     stderr += chunk.toString();
   });
 
   const ready = await new Promise<Ready>((resolve, reject) => {
-    let stdout = '';
     const timer = setTimeout(() => {
       reject(new Error(`CLI did not start.\nstdout:\n${stdout}\nstderr:\n${stderr}`));
     }, 30_000);
 
-    child.stdout?.on('data', (chunk: Buffer) => {
-      stdout += chunk.toString();
+    const poll = setInterval(() => {
       const line = stdout
         .split('\n')
         .find((candidate) => candidate.startsWith('{'));
-      if (line) {
-        clearTimeout(timer);
-        resolve(JSON.parse(line) as Ready);
+      if (!line) {
+        return;
       }
-    });
+      clearTimeout(timer);
+      clearInterval(poll);
+      try {
+        resolve(JSON.parse(line) as Ready);
+      } catch (error) {
+        reject(error);
+      }
+    }, 25);
 
     child.once('exit', (code) => {
       clearTimeout(timer);
+      clearInterval(poll);
       reject(
         new Error(`CLI exited with ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`),
       );
     });
   });
 
-  return { child, ready };
+  return { child, ready, output: () => stdout };
 }
 
 export async function stopCli(child: ChildProcess): Promise<void> {
@@ -82,6 +92,38 @@ export async function stopCli(child: ChildProcess): Promise<void> {
     child.once('exit', () => resolve());
     child.kill('SIGINT');
   });
+}
+
+export async function waitForExit(child: ChildProcess): Promise<void> {
+  if (child.exitCode !== null) {
+    return;
+  }
+  await new Promise<void>((resolve) => child.once('exit', () => resolve()));
+}
+
+export async function pathExists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Tracks a session's browsers and CLI children, then tears everything down. */
+export function trackSession(fixture: { close: () => Promise<void> }, profileDir: string) {
+  const children: ChildProcess[] = [];
+  const browsers: Browser[] = [];
+  return {
+    children,
+    browsers,
+    async cleanup(): Promise<void> {
+      for (const browser of browsers) await browser.close().catch(() => undefined);
+      for (const child of children) await stopCli(child).catch(() => undefined);
+      await fixture.close();
+      await rm(profileDir, { recursive: true, force: true });
+    },
+  };
 }
 
 export async function connect(cdpUrl: string): Promise<Browser> {

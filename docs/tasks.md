@@ -44,27 +44,24 @@ Save multiple selections, then open the session summary on demand. Review each s
 
 ## 4. Submit or discard a session
 
-Submit reviewed selections and session data as a batch. Support explicit discard. Keep submitted artifacts available until the one-month retention cleanup; delete discarded artifacts.
+Submit reviewed selections and session data as a batch. Support explicit discard. Keep submitted images available until the one-month retention cleanup; delete discarded artifacts. Session context capture and credential redaction are included in this task.
 
 **Success criteria — tested behavior**
 
-- A CLI-to-API integration flow submits a session and receives a batch response with the session ref, machine/session metadata, selection IDs and count, size estimate, image paths, frame index, and retrieval commands.
-- Submitted artifacts remain readable after submission and are not removed by discard cleanup.
+- A CLI-to-API integration flow submits a session and receives the documented manifest on CLI stdout with the session ref, machine/session metadata, selection IDs and count, image paths, frame index, session context, and an image retrieval command.
+- Submitted images remain readable after submission and are not removed by discard cleanup.
 - A separate flow discards a session, returns no agent payload, and verifies its session artifacts are deleted.
-- Browser disconnect and CLI cancellation return no payload and delete session artifacts.
+- Browser disconnect and CLI cancellation return no payload and delete unsubmitted session artifacts; submitted artifacts remain.
 - A hard-kill/crash fixture verifies that leftover artifacts can be removed by the documented age-based cleanup, which runs on CLI invocation.
-
-## 5. Capture session context and redact credentials
-
-Collect the supported session context alongside selections: console errors and warnings, timestamped app API requests and responses, an accessibility snapshot, origin storage/SQLite metadata where practical, and session diagnostics. Point and Tell attaches its own browser event listeners before navigating to the app, so collection does not depend on the visible DevTools Network or Console panels being open. Exclude static assets and bundles. Redact recognized credentials by default, with a **Redact credentials** toggle enabled by default.
-
-**Success criteria — tested behavior**
-
 - A fixture app generates representative console events, app API traffic, storage values, and recognized credential values; the submitted manifest contains the documented context and excludes static assets and bundles.
 - With Chromium DevTools closed, a fixture flow generates app API requests/responses and console errors/warnings after navigation; Point and Tell captures them, demonstrating that collection starts independently of the visible DevTools panels.
 - With redaction enabled, recognized credentials in supported fields are redacted in the submitted payload.
 - The flow verifies the documented limitation: request and response bodies are not scanned, so credentials placed only in those bodies may remain visible.
 - Turning the redaction toggle off changes the submitted values as described by the UI.
+
+## 5. Capture session context and redact credentials
+
+Merged into Task 4, including context collection and the default-on **Redact credentials** toggle. No separate implementation remains.
 
 ## 6. Record sampled interactions and review the timeline
 

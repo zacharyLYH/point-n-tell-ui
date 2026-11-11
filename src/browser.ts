@@ -1,7 +1,8 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { chromium, type BrowserContext, type CDPSession, type Page } from 'playwright';
-import { PRESETS } from './types.js';
+import { watchPage } from './context.js';
+import { PRESETS, type SessionSnapshot, type ViewportSpec } from './types.js';
 
 const REVIEW_CONTENT = { width: 1280, height: 800 };
 
@@ -17,6 +18,11 @@ export async function launchApp(options: {
   page: Page;
   setViewport: (viewport: { width: number; height: number }) => Promise<{ width: number; height: number }>;
   expandForReview: () => Promise<void>;
+  captureContext: (options: {
+    redactCredentials: boolean;
+    viewport: ViewportSpec;
+    accessibility?: string;
+  }) => Promise<SessionSnapshot>;
 }> {
   await mkdir(options.profileDir, { recursive: true });
 
@@ -120,6 +126,7 @@ export async function launchApp(options: {
 
   const viewport = await setViewport(PRESETS.desktop);
   options.onViewport?.(viewport);
+  const contextWatcher = watchPage(page, options.url, options.apiUrl);
   await page.goto(options.url, { waitUntil: 'domcontentloaded' });
   await page.bringToFront();
 
@@ -127,6 +134,7 @@ export async function launchApp(options: {
     context,
     page,
     setViewport,
+    captureContext: (captureOptions) => contextWatcher.capture(captureOptions),
     expandForReview: async () => {
       // Review uses the browser content area, so give it room on small presets.
       await resizeWindow(REVIEW_CONTENT);
@@ -136,12 +144,7 @@ export async function launchApp(options: {
 }
 
 export async function closeApp(context: BrowserContext): Promise<void> {
-  const browser = context.browser();
-  if (browser) {
-    await browser.close().catch(() => undefined);
-  } else {
-    await context.close().catch(() => undefined);
-  }
+  await (context.browser() ?? context).close().catch(() => undefined);
 }
 
 async function setCaptureChrome(page: Page, hidden: boolean) {
