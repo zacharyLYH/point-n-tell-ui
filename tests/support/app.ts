@@ -1,8 +1,9 @@
-import { chromium, expect, type Browser, type Page } from '@playwright/test';
+import { chromium, expect, type Browser, type Locator, type Page } from '@playwright/test';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { access, rm } from 'node:fs/promises';
+import { access, mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { freePort } from './fixtures.js';
+import { freePort, startFixture } from './fixtures.js';
 import { ROOT } from './paths.js';
 import type { SessionState } from '../../src/types.js';
 
@@ -155,6 +156,12 @@ export function trackSession(fixture: { url: string; close: () => Promise<void> 
   };
 }
 
+export async function startSession(prefix: string, html?: string) {
+  const fixture = await startFixture(html);
+  const profileDir = await mkdtemp(join(tmpdir(), prefix));
+  return { fixture, profileDir, ...trackSession(fixture, profileDir) };
+}
+
 export async function connect(cdpUrl: string): Promise<Browser> {
   return chromium.connectOverCDP(cdpUrl);
 }
@@ -201,6 +208,26 @@ export async function captureSelection(page: Page, comment?: string): Promise<vo
   await dialog.getByRole('button', { name: 'Save capture' }).click();
   await expect(dialog).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Start annotation' })).toBeVisible();
+}
+
+export async function startRecording(page: Page): Promise<void> {
+  await page.getByRole('button', { name: 'Start recording' }).click();
+  await expect(page.getByRole('region', { name: 'Recording controls' })).toBeVisible();
+}
+
+export async function stopRecording(page: Page): Promise<Locator> {
+  await page.getByRole('region', { name: 'Recording controls' }).hover();
+  await page.getByRole('button', { name: 'Stop recording' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Save video capture' });
+  await expect(dialog).toBeVisible();
+  return dialog;
+}
+
+export async function saveRecording(page: Page, comment: string): Promise<void> {
+  const dialog = await stopRecording(page);
+  await dialog.getByLabel('Capture comment').fill(comment);
+  await dialog.getByRole('button', { name: 'Save capture' }).click();
+  await expect(dialog).toHaveCount(0);
 }
 
 export async function drawSelection(

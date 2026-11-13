@@ -119,14 +119,14 @@ export function Overlay({ apiUrl }: { apiUrl: string }) {
   const syncViewport = () =>
     setActualViewport({ width: window.innerWidth, height: window.innerHeight });
 
+  const load = (signal?: AbortSignal) => apiRequest<SessionState>(`${apiUrl}/state`, { signal });
+
   useEffect(() => {
     const controller = new AbortController();
-    apiRequest<SessionState>(`${apiUrl}/state`, { signal: controller.signal })
+    load(controller.signal)
       .then(setState)
       .catch((reason: unknown) => {
-        if (!controller.signal.aborted) {
-          setError(errorMessage(reason));
-        }
+        if (!controller.signal.aborted) setError(errorMessage(reason));
       });
     return () => controller.abort();
   }, [apiUrl, setError]);
@@ -145,11 +145,7 @@ export function Overlay({ apiUrl }: { apiUrl: string }) {
   // A refreshed client rejoins transitions it did not initiate (e.g. processing).
   useEffect(() => {
     if (phase !== 'starting' && phase !== 'stopping' && phase !== 'processing') return;
-    const timer = window.setInterval(() => {
-      apiRequest<SessionState>(`${apiUrl}/state`)
-        .then(setState)
-        .catch(() => undefined);
-    }, 1000);
+    const timer = window.setInterval(() => load().then(setState).catch(() => undefined), 1000);
     return () => window.clearInterval(timer);
   }, [apiUrl, phase]);
 
@@ -160,14 +156,11 @@ export function Overlay({ apiUrl }: { apiUrl: string }) {
       try {
         setState((await sendJson<CaptureResult>(`${apiUrl}/recording/process`)).state);
       } catch (reason) {
-        setState(await apiRequest<SessionState>(`${apiUrl}/state`));
+        setState(await load());
         throw reason;
       }
     });
   }, [phase]);
-
-  const request = (path: string, body?: unknown) =>
-    sendJson<SessionState>(`${apiUrl}${path}`, body);
 
   const reset = () => {
     dispatch({ type: 'reset' });
@@ -177,9 +170,7 @@ export function Overlay({ apiUrl }: { apiUrl: string }) {
   };
 
   const send = (path: string, body?: unknown) =>
-    run(async () => {
-      setState(await request(path, body));
-    });
+    run(async () => setState(await sendJson<SessionState>(`${apiUrl}${path}`, body)));
 
   const applyViewport = async (preset: ViewportPreset, width: number, height: number) => {
     await send('/viewport', { preset, width, height });
@@ -223,8 +214,8 @@ export function Overlay({ apiUrl }: { apiUrl: string }) {
   const replaceSelection = (target: Selection) => {
     void run(async () => {
       setReviewContext(undefined);
-      setState(await request('/review/close'));
-      setState(await request('/viewport', target.viewport));
+      await sendJson<SessionState>(`${apiUrl}/review/close`);
+      setState(await sendJson<SessionState>(`${apiUrl}/viewport`, target.viewport));
       await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
       window.scrollTo(target.scroll.x, target.scroll.y);
       syncViewport();

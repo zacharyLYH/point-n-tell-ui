@@ -21,6 +21,7 @@ export async function launchApp(options: {
   onViewport?: (viewport: { width: number; height: number }) => void;
 }): Promise<{
   context: BrowserContext;
+  close: () => Promise<void>;
   page: Page;
   setViewport: (viewport: { width: number; height: number }) => Promise<{ width: number; height: number }>;
   expandForReview: () => Promise<void>;
@@ -50,9 +51,7 @@ export async function launchApp(options: {
   });
 
   const clickListeners = new Set<() => void>();
-  await context.exposeBinding('__pntRecordClick', () => {
-    for (const listener of clickListeners) listener();
-  });
+  await context.exposeBinding('__pntRecordClick', () => clickListeners.forEach((listener) => listener()));
   await context.addInitScript(() => {
     window.addEventListener(
       'click',
@@ -68,9 +67,7 @@ export async function launchApp(options: {
   });
   const subscribeClicks = (listener: () => void) => {
     clickListeners.add(listener);
-    return () => {
-      clickListeners.delete(listener);
-    };
+    return () => clickListeners.delete(listener);
   };
 
   const [first, ...extra] = context.pages();
@@ -157,16 +154,17 @@ export async function launchApp(options: {
 
   const viewport = await setViewport(PRESETS.desktop);
   options.onViewport?.(viewport);
-  const contextWatcher = watchPage(page, options.url, options.apiUrl);
+  const captureContext = watchPage(page, options.url, options.apiUrl);
   await page.goto(options.url, { waitUntil: 'domcontentloaded' });
   await page.bringToFront();
 
   return {
     context,
+    close: () => (context.browser() ?? context).close().catch(() => undefined),
     page,
     setViewport,
     subscribeClicks,
-    captureContext: (captureOptions) => contextWatcher.capture(captureOptions),
+    captureContext,
     expandForReview: async () => {
       // Review uses the browser content area, so give it room on small presets.
       await resizeWindow(REVIEW_CONTENT);
@@ -181,11 +179,11 @@ const CAPTURE_TIMEOUT_MS = 5_000;
 
 const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-function within<T>(work: Promise<T>, message: string): Promise<T> {
+function within<T>(work: Promise<T>): Promise<T> {
   return Promise.race([
     work,
     delay(CAPTURE_TIMEOUT_MS).then(() => {
-      throw new Error(message);
+      throw new Error('Recording did not stop in time');
     }),
   ]);
 }
@@ -253,8 +251,8 @@ export async function startCapture(
       unsubscribe();
       if (timer) clearTimeout(timer);
       try {
-        await within(Promise.all(pendingClicks), 'Recording did not stop in time');
-        await within(queue, 'Recording did not stop in time');
+        await within(Promise.all(pendingClicks));
+        await within(queue);
         if (failure) throw failure;
         return frames;
       } finally {
@@ -271,16 +269,7 @@ export async function startCapture(
   }
   timer = setTimeout(tick, SAMPLE_MS);
 
-  return {
-    stop,
-    dispose: async () => {
-      await stop().catch(() => undefined);
-    },
-  };
-}
-
-export async function closeApp(context: BrowserContext): Promise<void> {
-  await (context.browser() ?? context).close().catch(() => undefined);
+  return { stop };
 }
 
 async function setCaptureChrome(page: Page, hidden: boolean) {

@@ -43,10 +43,7 @@ async function setup(
       if (options.open) return options.open(dir);
       await mkdir(dir, { recursive: true });
       await writeFile(join(dir, '000001.jpg'), 'frame');
-      return {
-        stop: options.stop ?? (async () => frames),
-        dispose: async () => undefined,
-      };
+      return { stop: options.stop ?? (async () => frames) };
     },
     process: async (_frames, _framesDir, dir) => {
       if (options.process) return options.process(dir);

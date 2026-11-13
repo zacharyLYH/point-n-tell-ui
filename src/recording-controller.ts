@@ -82,10 +82,7 @@ export class RecordingController {
 
   private serial<T>(action: () => Promise<T>): Promise<T> {
     const result = this.queue.then(action, action);
-    this.queue = result.then(
-      () => undefined,
-      () => undefined,
-    );
+    this.queue = result.catch(() => undefined);
     return result;
   }
 
@@ -174,7 +171,7 @@ export class RecordingController {
     const handle = this.handle;
     this.handle = undefined;
     this.frames = undefined;
-    if (handle) await handle.dispose().catch(() => undefined);
+    if (handle) await handle.stop().catch(() => undefined);
     const recordingId = this.recordingId();
     if (!recordingId) return;
     await deleteSessionArtifacts(this.framesDir(recordingId)).catch(() => undefined);

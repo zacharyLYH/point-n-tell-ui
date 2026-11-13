@@ -4,8 +4,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { cleanupExpiredArtifacts } from '../src/artifacts.js';
 import type { SubmissionResult } from '../src/types.js';
-import { drawSelection, pathExists, sessionState, stopCli, trackSession, waitForExit } from './support/app.js';
-import { startFixture } from './support/fixtures.js';
+import {
+  drawSelection,
+  pathExists,
+  sessionState,
+  startSession,
+  stopCli,
+  waitForExit,
+} from './support/app.js';
 
 const HEADLESS = { PNT_HEADLESS: '1' };
 
@@ -32,9 +38,7 @@ async function setViewport(
 test('rejects a duplicate live session ref without touching its state or artifacts', async () => {
   test.setTimeout(120_000);
 
-  const fixture = await startFixture();
-  const profileDir = await mkdtemp(join(tmpdir(), 'pnt-duplicate-'));
-  const { launch, cleanup } = trackSession(fixture, profileDir);
+  const { launch, cleanup } = await startSession('pnt-duplicate-');
 
   try {
     const first = await launch({ sessionId: 'duplicate ref', env: HEADLESS });
@@ -57,12 +61,10 @@ test('rejects a duplicate live session ref without touching its state or artifac
 test('an expired duplicate ref is cleaned before the new session reserves it', async () => {
   test.setTimeout(120_000);
 
-  const fixture = await startFixture();
-  const profileDir = await mkdtemp(join(tmpdir(), 'pnt-expired-ref-'));
+  const { profileDir, launch, cleanup } = await startSession('pnt-expired-ref-');
   const artifactsDir = join(profileDir, 'artifacts', 'kilo__checkout-bug__expired-ref');
   const stale = join(artifactsDir, 'stale.webp');
   const oldDate = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000);
-  const { launch, cleanup } = trackSession(fixture, profileDir);
 
   try {
     await mkdir(artifactsDir, { recursive: true });
@@ -128,13 +130,11 @@ test('cleanup ignores malformed roots and entries', async () => {
 test('malformed artifact entries do not block launch or cleanup of other sessions', async () => {
   test.setTimeout(120_000);
 
-  const fixture = await startFixture();
-  const profileDir = await mkdtemp(join(tmpdir(), 'pnt-malformed-launch-'));
+  const { profileDir, launch, cleanup } = await startSession('pnt-malformed-launch-');
   const root = join(profileDir, 'artifacts');
   const notASession = join(root, 'not-a-directory');
   const expired = join(root, 'kilo__old__session');
   const oldDate = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000);
-  const { launch, cleanup } = trackSession(fixture, profileDir);
 
   try {
     await mkdir(root, { recursive: true });
@@ -156,9 +156,7 @@ test('malformed artifact entries do not block launch or cleanup of other session
 test('hard kill leaves artifacts while another live session keeps working', async () => {
   test.setTimeout(180_000);
 
-  const fixture = await startFixture();
-  const profileDir = await mkdtemp(join(tmpdir(), 'pnt-hard-kill-'));
-  const { launch, cleanup } = trackSession(fixture, profileDir);
+  const { launch, cleanup } = await startSession('pnt-hard-kill-');
 
   try {
     const first = await launch({ sessionId: 'hard-kill-a', env: HEADLESS });
@@ -189,9 +187,7 @@ test('hard kill leaves artifacts while another live session keeps working', asyn
 test('concurrent sessions isolate viewports, captures, edits, and lifecycle', async () => {
   test.setTimeout(180_000);
 
-  const fixture = await startFixture();
-  const profileDir = await mkdtemp(join(tmpdir(), 'pnt-concurrent-'));
-  const { launch, cleanup } = trackSession(fixture, profileDir);
+  const { profileDir, launch, cleanup } = await startSession('pnt-concurrent-');
 
   try {
     const first = await launch({ sessionId: 'concurrent-a', env: HEADLESS });

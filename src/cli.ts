@@ -12,7 +12,7 @@ import {
   shellQuote,
   writeContextArtifacts,
 } from './artifacts.js';
-import { closeApp, launchApp, saveAnnotatedScreenshot, startCapture } from './browser.js';
+import { launchApp, saveAnnotatedScreenshot, startCapture } from './browser.js';
 import { checkFfmpeg, generateCuts } from './recording.js';
 import { RecordingController, cutsDir } from './recording-controller.js';
 import { startServer } from './server.js';
@@ -126,9 +126,9 @@ async function main(): Promise<void> {
   const api = await startServer({
     getState: () => state,
     imagePath: (id) => {
-      const selection = [...state.selections, ...(pending ? [pending.selection] : [])].find(
-        (item) => item.selectionId === id,
-      );
+      const selection =
+        state.selections.find((item) => item.selectionId === id) ??
+        (pending?.selection.selectionId === id ? pending.selection : undefined);
       if (selection) return selection.imagePath;
       const draft = state.recording.phase === 'draft' ? state.recording.recording : undefined;
       const recordings = draft ? [...state.recordings, draft] : state.recordings;
@@ -145,7 +145,6 @@ async function main(): Promise<void> {
         throw new Error('Selection not found');
       }
       const { page } = app();
-      await mkdir(artifactsDir, { recursive: true });
       const selectionId = randomUUID();
       const imagePath = join(artifactsDir, `${selectionId}.webp`);
       const [topLeft, , bottomRight] = coordinates;
@@ -212,11 +211,10 @@ async function main(): Promise<void> {
       return state;
     },
     deleteRecording: async (recordingId) => {
-      if (!state.recordings.some((item) => item.recordingId === recordingId)) {
-        throw new Error('Recording not found');
-      }
+      const recording = state.recordings.find((item) => item.recordingId === recordingId);
+      if (!recording) throw new Error('Recording not found');
       await deleteSessionArtifacts(cutsDir(artifactsDir, recordingId));
-      state.recordings = state.recordings.filter((item) => item.recordingId !== recordingId);
+      state.recordings = state.recordings.filter((item) => item !== recording);
       return state;
     },
     openReview: async () => {
@@ -347,7 +345,7 @@ async function main(): Promise<void> {
     }
     await api.close().catch(() => undefined);
     if (launched) {
-      await closeApp(launched.context);
+      await launched.close();
     }
   }
 }

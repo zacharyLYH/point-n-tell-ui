@@ -42,22 +42,22 @@ test('demo carts and orders are scoped per session', async () => {
     },
   );
   const base = `http://127.0.0.1:${port}`;
+  const cart = async (cookie?: string) =>
+    (await (
+      await fetch(`${base}/api/cart`, cookie ? { headers: { cookie } } : undefined)
+    ).json()) as { items: { id: string; quantity: number }[] };
 
   try {
     await waitForDemo(base);
 
     const firstResponse = await fetch(`${base}/api/cart`);
     const firstCookie = cookieFrom(firstResponse);
-    const firstCart = (await firstResponse.json()) as {
-      items: { id: string; quantity: number }[];
-    };
+    const firstCart = (await firstResponse.json()) as { items: { id: string; quantity: number }[] };
     expect(firstCart.items).toHaveLength(2);
 
     const secondResponse = await fetch(`${base}/api/cart`);
     const secondCookie = cookieFrom(secondResponse);
-    const secondCart = (await secondResponse.json()) as {
-      items: { id: string; quantity: number }[];
-    };
+    const secondCart = (await secondResponse.json()) as { items: { id: string; quantity: number }[] };
     expect(secondCart.items).toHaveLength(2);
     expect(secondCart.items.map((item) => item.id)).not.toEqual(
       firstCart.items.map((item) => item.id),
@@ -70,9 +70,7 @@ test('demo carts and orders are scoped per session', async () => {
     });
     expect(patched.ok).toBe(true);
 
-    const secondAgain = (await (
-      await fetch(`${base}/api/cart`, { headers: { cookie: secondCookie } })
-    ).json()) as { items: { id: string; quantity: number }[] };
+    const secondAgain = await cart(secondCookie);
     expect(secondAgain.items.find((item) => item.id === secondCart.items[0].id)?.quantity).toBe(1);
 
     const placed = await fetch(`${base}/api/orders`, {
@@ -85,14 +83,8 @@ test('demo carts and orders are scoped per session', async () => {
     expect(order.note).toBe('Leave with the concierge');
     expect(order.itemCount).toBe(2);
 
-    const firstAfter = (await (
-      await fetch(`${base}/api/cart`, { headers: { cookie: firstCookie } })
-    ).json()) as { items: unknown[] };
-    expect(firstAfter.items).toHaveLength(0);
-    const secondAfter = (await (
-      await fetch(`${base}/api/cart`, { headers: { cookie: secondCookie } })
-    ).json()) as { items: unknown[] };
-    expect(secondAfter.items).toHaveLength(2);
+    expect((await cart(firstCookie)).items).toHaveLength(0);
+    expect((await cart(secondCookie)).items).toHaveLength(2);
   } finally {
     if (child.exitCode === null) {
       await new Promise<void>((resolve) => {

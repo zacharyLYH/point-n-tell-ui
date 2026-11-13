@@ -1,8 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, utimes, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir, readFile, utimes, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { CaptureResult, SessionState, SubmissionResult } from '../src/types.js';
 import {
@@ -14,8 +13,8 @@ import {
   launchCli,
   pathExists,
   sessionState,
+  startSession,
   stopCli,
-  trackSession,
   waitForExit,
 } from './support/app.js';
 import {
@@ -24,7 +23,6 @@ import {
   PREVIEW_FIXTURE,
   SCROLL_FIXTURE,
   SECRETS_FIXTURE,
-  startFixture,
 } from './support/fixtures.js';
 import { ROOT } from './support/paths.js';
 import {
@@ -37,9 +35,7 @@ import {
 test('runs the real CLI headed, persists the profile, and switches viewports', async () => {
   test.setTimeout(120_000);
 
-  const fixture = await startFixture();
-  const profileDir = await mkdtemp(join(tmpdir(), 'pnt-profile-'));
-  const { children, browsers, cleanup } = trackSession(fixture, profileDir);
+  const { fixture, profileDir, children, browsers, cleanup } = await startSession('pnt-profile-');
 
   try {
     const first = await launchCli({
@@ -234,9 +230,7 @@ test('runs the real CLI headed, persists the profile, and switches viewports', a
 test('reviews, edits, deletes, and replaces selections', async () => {
   test.setTimeout(120_000);
 
-  const fixture = await startFixture();
-  const profileDir = await mkdtemp(join(tmpdir(), 'pnt-review-'));
-  const { launch, cleanup } = trackSession(fixture, profileDir);
+  const { fixture, launch, cleanup } = await startSession('pnt-review-');
 
   try {
     const { cli, page } = await launch({ sessionId: 'review-flow' });
@@ -368,9 +362,7 @@ test('reviews, edits, deletes, and replaces selections', async () => {
 test('saves identical previews of the same element at every viewport', async () => {
   test.setTimeout(120_000);
 
-  const fixture = await startFixture(PREVIEW_FIXTURE);
-  const profileDir = await mkdtemp(join(tmpdir(), 'pnt-preview-'));
-  const { children, browsers, cleanup } = trackSession(fixture, profileDir);
+  const { fixture, profileDir, children, browsers, cleanup } = await startSession('pnt-preview-', PREVIEW_FIXTURE);
   const presets = [
     { label: 'desktop', button: /Desktop viewport/, width: 1440, height: 900 },
     { label: 'tablet', button: /Tablet viewport/, width: 768, height: 1024 },
@@ -455,9 +447,7 @@ test('saves identical previews of the same element at every viewport', async () 
 test('replacing a capture restores its viewport and scroll', async () => {
   test.setTimeout(120_000);
 
-  const fixture = await startFixture(PREVIEW_FIXTURE);
-  const profileDir = await mkdtemp(join(tmpdir(), 'pnt-replace-'));
-  const { launch, cleanup } = trackSession(fixture, profileDir);
+  const { launch, cleanup } = await startSession('pnt-replace-', PREVIEW_FIXTURE);
 
   try {
     const { cli, page } = await launch({ sessionId: 'replace-context' });
@@ -516,9 +506,7 @@ test('replacing a capture restores its viewport and scroll', async () => {
 test('replacing a capture accepts the clamped viewport it recorded', async () => {
   test.setTimeout(120_000);
 
-  const fixture = await startFixture();
-  const profileDir = await mkdtemp(join(tmpdir(), 'pnt-clamped-'));
-  const { children, browsers, cleanup } = trackSession(fixture, profileDir);
+  const { fixture, profileDir, children, browsers, cleanup } = await startSession('pnt-clamped-');
   const clamped = { preset: 'desktop', width: 1440, height: 798 };
 
   try {
@@ -568,9 +556,7 @@ test('replacing a capture accepts the clamped viewport it recorded', async () =>
 test('context checks are relative to the capture viewport', async () => {
   test.setTimeout(120_000);
 
-  const fixture = await startFixture();
-  const profileDir = await mkdtemp(join(tmpdir(), 'pnt-context-'));
-  const { launch, cleanup } = trackSession(fixture, profileDir);
+  const { fixture, launch, cleanup } = await startSession('pnt-context-');
 
   try {
     const { page } = await launch({ sessionId: 'context-relative' });
@@ -617,9 +603,7 @@ test('context checks are relative to the capture viewport', async () => {
 test('submits included selections with context and keeps artifacts', async () => {
   test.setTimeout(120_000);
 
-  const fixture = await startFixture(CONTEXT_FIXTURE);
-  const profileDir = await mkdtemp(join(tmpdir(), 'pnt-submit-'));
-  const { launch, cleanup } = trackSession(fixture, profileDir);
+  const { profileDir, launch, cleanup } = await startSession('pnt-submit-', CONTEXT_FIXTURE);
 
   try {
     const { cli, page } = await launch({ sessionId: 'submit-flow' });
@@ -738,9 +722,7 @@ test('submits included selections with context and keeps artifacts', async () =>
 test('redaction toggle off submits raw context values', async () => {
   test.setTimeout(120_000);
 
-  const fixture = await startFixture(CONTEXT_FIXTURE);
-  const profileDir = await mkdtemp(join(tmpdir(), 'pnt-submit-raw-'));
-  const { launch, cleanup } = trackSession(fixture, profileDir);
+  const { launch, cleanup } = await startSession('pnt-submit-raw-', CONTEXT_FIXTURE);
 
   try {
     const { cli, page } = await launch({ sessionId: 'submit-raw' });
@@ -783,9 +765,7 @@ test('redaction toggle off submits raw context values', async () => {
 test('discards a session and deletes its artifacts', async () => {
   test.setTimeout(120_000);
 
-  const fixture = await startFixture();
-  const profileDir = await mkdtemp(join(tmpdir(), 'pnt-discard-'));
-  const { launch, cleanup } = trackSession(fixture, profileDir);
+  const { profileDir, launch, cleanup } = await startSession('pnt-discard-');
 
   try {
     const { cli, page } = await launch({ sessionId: 'discard-flow' });
@@ -809,9 +789,7 @@ test('discards a session and deletes its artifacts', async () => {
 test('browser disconnect deletes unsubmitted artifacts', async () => {
   test.setTimeout(120_000);
 
-  const fixture = await startFixture();
-  const profileDir = await mkdtemp(join(tmpdir(), 'pnt-disconnect-'));
-  const { launch, cleanup } = trackSession(fixture, profileDir);
+  const { profileDir, launch, cleanup } = await startSession('pnt-disconnect-');
 
   try {
     const { cli, page } = await launch({ sessionId: 'disconnect-flow' });
@@ -831,9 +809,7 @@ test('browser disconnect deletes unsubmitted artifacts', async () => {
 test('CLI cancellation deletes unsubmitted artifacts', async () => {
   test.setTimeout(120_000);
 
-  const fixture = await startFixture();
-  const profileDir = await mkdtemp(join(tmpdir(), 'pnt-cancel-'));
-  const { launch, cleanup } = trackSession(fixture, profileDir);
+  const { profileDir, launch, cleanup } = await startSession('pnt-cancel-');
 
   try {
     const { cli, page } = await launch({ sessionId: 'cancel-flow' });
@@ -852,9 +828,7 @@ test('CLI cancellation deletes unsubmitted artifacts', async () => {
 test('CLI invocation cleans up artifacts older than one month', async () => {
   test.setTimeout(120_000);
 
-  const fixture = await startFixture();
-  const profileDir = await mkdtemp(join(tmpdir(), 'pnt-cleanup-'));
-  const { children, browsers, cleanup } = trackSession(fixture, profileDir);
+  const { fixture, profileDir, children, browsers, cleanup } = await startSession('pnt-cleanup-');
   const root = join(profileDir, 'artifacts');
   const expired = join(root, 'kilo__old__crash');
   const fresh = join(root, 'kilo__fresh__crash');
@@ -911,9 +885,7 @@ test('help documents the CLI surface', async () => {
 test('restores bottom-of-page captures across presets', async () => {
   test.setTimeout(120_000);
 
-  const fixture = await startFixture(SCROLL_FIXTURE);
-  const profileDir = await mkdtemp(join(tmpdir(), 'pnt-bottom-'));
-  const { launch, cleanup } = trackSession(fixture, profileDir);
+  const { launch, cleanup } = await startSession('pnt-bottom-', SCROLL_FIXTURE);
 
   try {
     const { cli, page } = await launch({ sessionId: 'bottom-edge' });
@@ -981,9 +953,7 @@ test('restores bottom-of-page captures across presets', async () => {
 test('blocks empty submits and rejects malformed session input', async () => {
   test.setTimeout(120_000);
 
-  const fixture = await startFixture();
-  const profileDir = await mkdtemp(join(tmpdir(), 'pnt-empty-'));
-  const { launch, cleanup } = trackSession(fixture, profileDir);
+  const { profileDir, launch, cleanup } = await startSession('pnt-empty-');
 
   try {
     const { cli, page } = await launch({ sessionId: 'empty-edge' });
@@ -1077,9 +1047,7 @@ test('blocks empty submits and rejects malformed session input', async () => {
 test('redacts credential variants in storage, URLs, and headers', async () => {
   test.setTimeout(120_000);
 
-  const fixture = await startFixture(SECRETS_FIXTURE);
-  const profileDir = await mkdtemp(join(tmpdir(), 'pnt-secrets-'));
-  const { launch, cleanup } = trackSession(fixture, profileDir);
+  const { fixture, launch, cleanup } = await startSession('pnt-secrets-', SECRETS_FIXTURE);
 
   try {
     const { cli, page } = await launch({ sessionId: 'secrets-edge' });

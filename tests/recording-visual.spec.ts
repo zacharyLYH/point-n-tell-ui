@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { trackSession } from './support/app.js';
+import { startRecording, trackSession } from './support/app.js';
 import { startFixture } from './support/fixtures.js';
 import { saveScreenshot } from './support/screenshots.js';
 
@@ -28,8 +28,7 @@ test('shows the recording bar, FFmpeg processing, and both comment dialogs', asy
 
     // 1. The FFmpeg blocking state. The processing request is held so the state
     // can be captured, then that gated capture is deleted.
-    await page.getByRole('button', { name: 'Start recording' }).click();
-    await expect(tab).toBeVisible();
+    await startRecording(page);
     await expect(tab).toHaveAttribute('data-state', 'recording');
     // Recording owns the top band: the toolbar is replaced by the recording bar.
     await expect(page.getByRole('region', { name: 'Point and Tell toolbar' })).toHaveCount(0);
@@ -53,8 +52,7 @@ test('shows the recording bar, FFmpeg processing, and both comment dialogs', asy
     await expect(gated).toHaveCount(0);
 
     // 2. The recording bar, idle and with the stop control revealed on hover.
-    await page.getByRole('button', { name: 'Start recording' }).click();
-    await expect(tab).toBeVisible();
+    await startRecording(page);
     await expect(tab).toHaveAttribute('data-state', 'recording');
     await page.mouse.move(40, 400);
     await expect(tab.getByRole('status', { name: 'Recording in progress' })).toBeVisible();

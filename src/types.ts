@@ -65,7 +65,6 @@ export type Frame = { timestamp: string; click?: boolean };
 
 export type CaptureHandle = {
   stop: () => Promise<Frame[]>;
-  dispose: () => Promise<void>;
 };
 
 export type RecordingPhase =

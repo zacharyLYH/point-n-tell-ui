@@ -31,18 +31,12 @@ export function CommentDialog({
   );
   const { busy, error, run } = useAction();
 
-  const settle = (method: 'POST' | 'PATCH' | 'DELETE', body?: unknown) =>
-    void run(async () =>
-      onDone(
-        await sendJson<SessionState>(
-          isRecording
-            ? `${apiUrl}/recording/${method === 'POST' ? 'save' : 'draft'}`
-            : `${apiUrl}/selection/${id}`,
-          body,
-          method,
-        ),
-      ),
-    );
+  const settle = (method: 'POST' | 'PATCH' | 'DELETE', body?: unknown) => {
+    const url = isRecording
+      ? `${apiUrl}/recording/${method === 'POST' ? 'save' : 'draft'}`
+      : `${apiUrl}/selection/${id}`;
+    void run(async () => onDone(await sendJson<SessionState>(url, body, method)));
+  };
 
   return (
     <Dialog open onOpenChange={(open) => !open && settle('DELETE')}>

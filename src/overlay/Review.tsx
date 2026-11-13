@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import { Camera, PencilLine, Send, Trash2 } from 'lucide-react';
-import type { Recording, ReviewContext, Selection, SessionState, SubmissionResult, ViewportSpec } from '../types.js';
+import type { Recording, ReviewContext, Selection, SessionState, SubmissionResult } from '../types.js';
 import { sendJson, useAction } from './api.js';
 import { CutCarousel, cutImages } from './CutCarousel.js';
 import { Alert } from '../components/ui/alert.js';
@@ -14,17 +14,10 @@ import { Textarea } from '../components/ui/textarea.js';
 import { cn } from '../lib/utils.js';
 
 /** Screenshot selections and video recordings share one review list. */
-type Item = {
-  id: string;
-  kind: 'selection' | 'recording';
-  label: string;
-  comment: string;
-  images: { id: string; label: string }[];
-  viewport: ViewportSpec;
-  url: string;
-  selection?: Selection;
-  recording?: Recording;
-};
+type Item = { id: string; label: string; images: { id: string; label: string }[] } & (
+  | { kind: 'selection'; capture: Selection }
+  | { kind: 'recording'; capture: Recording }
+);
 
 function itemsOf(state: SessionState): Item[] {
   return [
@@ -32,21 +25,15 @@ function itemsOf(state: SessionState): Item[] {
       id: selection.selectionId,
       kind: 'selection' as const,
       label: `Selection ${index + 1}`,
-      comment: selection.comment,
       images: [{ id: selection.selectionId, label: 'Screenshot' }],
-      viewport: selection.viewport,
-      url: selection.page.url,
-      selection,
+      capture: selection,
     })),
     ...state.recordings.map((recording, index) => ({
       id: recording.recordingId,
       kind: 'recording' as const,
       label: `Recording ${index + 1}`,
-      comment: recording.comment,
       images: cutImages(recording),
-      viewport: recording.viewport,
-      url: recording.page.url,
-      recording,
+      capture: recording,
     })),
   ];
 }
@@ -77,10 +64,11 @@ export function Review({
   const items = itemsOf(state);
   // Removing the last item falls back to the first remaining one.
   const selected = items.find((item) => item.id === requestedId) ?? items[0];
-  const selection = selected?.selection;
+  const selection = selected?.kind === 'selection' ? selected.capture : undefined;
+  const recording = selected?.kind === 'recording' ? selected.capture : undefined;
   const selectedId = selected?.id;
-  const index = items.findIndex((item) => item.id === selectedId);
-  const comment = draft ?? selected?.comment ?? '';
+  const index = selected ? items.indexOf(selected) : -1;
+  const comment = draft ?? selected?.capture.comment ?? '';
 
   // A drafted comment belongs to the capture it was typed for.
   const select = (id: string) => {
@@ -149,37 +137,32 @@ export function Review({
               Redact credentials
             </Label>
           </div>
-          {confirmDiscard ? (
-            <>
-              <span className="text-[11px] text-muted-foreground">
-                Discard session and delete captures?
-              </span>
-              <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => setConfirmDiscard(false)}>
-                Cancel
-              </Button>
-              <Button type="button" variant="destructive" size="sm" disabled={busy} onClick={discard}>
-                Confirm discard
-              </Button>
-            </>
-          ) : (
-            <>
-              <Button type="button" variant="outline" size="sm" disabled={busy} onClick={onClose}>
-                Close
-              </Button>
-              <Button
-                type="button"
-                variant="destructive"
-                size="sm"
-                disabled={busy}
-                onClick={() => setConfirmDiscard(true)}
-              >
-                Discard
-              </Button>
-              <Button type="button" size="sm" disabled={busy || items.length === 0} onClick={submit}>
-                <Send aria-hidden="true" />
-                Submit
-              </Button>
-            </>
+          {confirmDiscard && (
+            <span className="text-[11px] text-muted-foreground">Discard session and delete captures?</span>
+          )}
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={busy}
+            onClick={() => (confirmDiscard ? setConfirmDiscard(false) : onClose())}
+          >
+            {confirmDiscard ? 'Cancel' : 'Close'}
+          </Button>
+          <Button
+            type="button"
+            variant="destructive"
+            size="sm"
+            disabled={busy}
+            onClick={confirmDiscard ? discard : () => setConfirmDiscard(true)}
+          >
+            {confirmDiscard ? 'Confirm discard' : 'Discard'}
+          </Button>
+          {!confirmDiscard && (
+            <Button type="button" size="sm" disabled={busy || items.length === 0} onClick={submit}>
+              <Send aria-hidden="true" />
+              Submit
+            </Button>
           )}
         </header>
         <Separator />
@@ -192,7 +175,7 @@ export function Review({
           >
             {items.map((item) => {
               // A capture from another page cannot be compared at all.
-              const otherUrl = item.url !== context.url;
+              const otherUrl = item.capture.page.url !== context.url;
               const active = item.id === selectedId;
               return (
                 <Button
@@ -214,7 +197,9 @@ export function Review({
                   />
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-xs font-medium">{item.label}</span>
-                    <span className="block truncate text-[11px] text-muted-foreground">{item.comment}</span>
+                    <span className="block truncate text-[11px] text-muted-foreground">
+                      {item.capture.comment}
+                    </span>
                     <span className="mt-1 flex flex-wrap gap-1">
                       <Badge variant="secondary">Included</Badge>
                       {item.kind === 'recording' && (
@@ -253,12 +238,12 @@ export function Review({
                   <div className="flex items-center justify-between gap-2">
                     <h2 className="text-xs font-semibold">{selected.label}</h2>
                     <Badge variant="secondary" className="shrink-0 capitalize">
-                      {selected.viewport.preset}
+                      {selected.capture.viewport.preset}
                     </Badge>
                   </div>
-                  {selected.recording && (
+                  {recording && (
                     <p className="text-[11px] text-muted-foreground" data-testid="recording-stats">
-                      {selected.images.length} cuts · {selected.recording.durationMs} ms · saved recording, no retake
+                      {selected.images.length} cuts · {recording.durationMs} ms
                     </p>
                   )}
 
@@ -285,7 +270,7 @@ export function Review({
                         type="button"
                         variant="secondary"
                         size="sm"
-                        disabled={busy || !comment.trim() || comment.trim() === selected.comment}
+                        disabled={busy || !comment.trim() || comment.trim() === selected.capture.comment}
                         onClick={() => void request(`/${selected.kind}/${selected.id}`, { comment: comment.trim() }, 'PATCH')}
                       >
                         Save comment

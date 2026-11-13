@@ -84,14 +84,14 @@ function parseCoordinates(value: unknown): Coordinates {
     return { x, y } as Point;
   }) as Coordinates;
   const [topLeft, topRight, bottomRight, bottomLeft] = points;
-  const axisAligned =
-    topLeft.y === topRight.y &&
-    topRight.x === bottomRight.x &&
-    bottomRight.y === bottomLeft.y &&
-    bottomLeft.x === topLeft.x &&
-    topRight.x > topLeft.x &&
-    bottomLeft.y > topLeft.y;
-  if (!axisAligned) {
+  if (
+    topLeft.y !== topRight.y ||
+    topRight.x !== bottomRight.x ||
+    bottomRight.y !== bottomLeft.y ||
+    bottomLeft.x !== topLeft.x ||
+    topRight.x <= topLeft.x ||
+    bottomLeft.y <= topLeft.y
+  ) {
     throw new Error('Selection coordinates must describe a non-empty rectangle');
   }
   return points;

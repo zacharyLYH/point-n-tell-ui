@@ -16,13 +16,8 @@ export function cutImages(recording: Recording, withTags = false) {
   const startedAt = Date.parse(recording.startedAt);
   return recording.cuts.map((cut) => ({
     id: cut.cutId,
-    label: [
-      `Cut ${cut.number}`,
-      `${(Math.max(0, Date.parse(cut.timestamp) - startedAt) / 1000).toFixed(1)}s`,
-      withTags ? cut.tags.join(' + ') : '',
-    ]
-      .filter(Boolean)
-      .join(' · '),
+    label: `Cut ${cut.number} · ${(Math.max(0, Date.parse(cut.timestamp) - startedAt) / 1000).toFixed(1)}s` +
+      (withTags ? ` · ${cut.tags.join(' + ')}` : ''),
   }));
 }
 

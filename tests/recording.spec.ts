@@ -6,28 +6,28 @@ import type { SubmissionResult } from '../src/types.js';
 import {
   captureSelection,
   pathExists,
+  saveRecording,
   sessionState,
+  startRecording,
+  startSession,
   stopCli,
-  trackSession,
+  stopRecording,
   waitForExit,
 } from './support/app.js';
-import { startFixture } from './support/fixtures.js';
 
 test('records the viewport, generates ordered cuts, and submits the video capture', async () => {
   test.setTimeout(180_000);
 
-  const fixture = await startFixture();
-  const { launch, cleanup } = trackSession(fixture, await mkdtemp(join(tmpdir(), 'pnt-record-')));
+  const { fixture, launch, cleanup } = await startSession('pnt-record-');
 
   try {
     const { cli, page, artifactsDir } = await launch({ url: fixture.url, sessionId: 'record-flow' });
 
-    await page.getByRole('button', { name: 'Start recording' }).click();
+    await startRecording(page);
 
     // The toolbar is gone from the page, so it cannot appear in the video.
     await expect(page.getByRole('region', { name: 'Point and Tell toolbar' })).toHaveCount(0);
     const tab = page.getByRole('region', { name: 'Recording controls' });
-    await expect(tab).toBeVisible();
     await expect(tab).toHaveAttribute('data-state', 'recording');
     await expect(tab.getByRole('status', { name: 'Recording in progress' })).toBeVisible();
 
@@ -54,11 +54,7 @@ test('records the viewport, generates ordered cuts, and submits the video captur
     await page.waitForTimeout(400);
 
     // Hovering the small tab reveals the stop control.
-    await tab.hover();
-    await page.getByRole('button', { name: 'Stop recording' }).click();
-
-    const dialog = page.getByRole('dialog', { name: 'Save video capture' });
-    await expect(dialog).toBeVisible();
+    const dialog = await stopRecording(page);
     const position = dialog.getByTestId('cut-position');
     await expect(position).toHaveText(/^1 \/ \d+$/);
     const count = Number((await position.textContent())!.split('/')[1].trim());
@@ -183,14 +179,13 @@ test('records the viewport, generates ordered cuts, and submits the video captur
 test('records every click as a cut even without pixel changes', async () => {
   test.setTimeout(120_000);
 
-  const fixture = await startFixture();
-  const { launch, cleanup } = trackSession(fixture, await mkdtemp(join(tmpdir(), 'pnt-click-cuts-')));
+  const { fixture, launch, cleanup } = await startSession('pnt-click-cuts-');
 
   try {
     const { cli, page } = await launch({ url: fixture.url, sessionId: 'click-cuts' });
     const tab = page.getByRole('region', { name: 'Recording controls' });
 
-    await page.getByRole('button', { name: 'Start recording' }).click();
+    await startRecording(page);
     await expect(tab).toHaveAttribute('data-state', 'recording');
 
     // The button changes no pixels, so these cuts can only come from clicks.
@@ -200,13 +195,7 @@ test('records every click as a cut even without pixel changes', async () => {
     await page.waitForTimeout(350);
     await button.click();
 
-    await tab.hover();
-    await page.getByRole('button', { name: 'Stop recording' }).click();
-    const dialog = page.getByRole('dialog', { name: 'Save video capture' });
-    await expect(dialog).toBeVisible();
-    await dialog.getByLabel('Capture comment').fill('Click cuts');
-    await dialog.getByRole('button', { name: 'Save capture' }).click();
-    await expect(dialog).toHaveCount(0);
+    await saveRecording(page, 'Click cuts');
 
     const [recording] = (await sessionState(cli.ready.apiUrl)).recordings;
     const clickCuts = recording.cuts.filter((cut) => cut.tags.includes('click'));
@@ -223,14 +212,13 @@ test('records every click as a cut even without pixel changes', async () => {
 test('only pixel changes above 10% become pixel-diff cuts', async () => {
   test.setTimeout(120_000);
 
-  const fixture = await startFixture();
-  const { launch, cleanup } = trackSession(fixture, await mkdtemp(join(tmpdir(), 'pnt-diff-cuts-')));
+  const { fixture, launch, cleanup } = await startSession('pnt-diff-cuts-');
 
   try {
     const { cli, page } = await launch({ url: fixture.url, sessionId: 'diff-cuts' });
     const tab = page.getByRole('region', { name: 'Recording controls' });
 
-    await page.getByRole('button', { name: 'Start recording' }).click();
+    await startRecording(page);
     await expect(tab).toHaveAttribute('data-state', 'recording');
 
     // Roughly 2% of the viewport: below the 10% threshold, so no cut.
@@ -257,13 +245,7 @@ test('only pixel changes above 10% become pixel-diff cuts', async () => {
     await page.evaluate(() => document.getElementById('large-marker')!.remove());
     await page.waitForTimeout(600);
 
-    await tab.hover();
-    await page.getByRole('button', { name: 'Stop recording' }).click();
-    const dialog = page.getByRole('dialog', { name: 'Save video capture' });
-    await expect(dialog).toBeVisible();
-    await dialog.getByLabel('Capture comment').fill('Diff cuts');
-    await dialog.getByRole('button', { name: 'Save capture' }).click();
-    await expect(dialog).toHaveCount(0);
+    await saveRecording(page, 'Diff cuts');
 
     const [recording] = (await sessionState(cli.ready.apiUrl)).recordings;
     // First, large add, large remove, last. The small marker adds nothing.
@@ -282,17 +264,13 @@ test('only pixel changes above 10% become pixel-diff cuts', async () => {
 test('compares each candidate against the last kept cut', async () => {
   test.setTimeout(120_000);
 
-  const fixture = await startFixture();
-  const { launch, cleanup } = trackSession(
-    fixture,
-    await mkdtemp(join(tmpdir(), 'pnt-benchmark-cuts-')),
-  );
+  const { fixture, launch, cleanup } = await startSession('pnt-benchmark-cuts-');
 
   try {
     const { cli, page } = await launch({ url: fixture.url, sessionId: 'benchmark-cuts' });
     const tab = page.getByRole('region', { name: 'Recording controls' });
 
-    await page.getByRole('button', { name: 'Start recording' }).click();
+    await startRecording(page);
     await expect(tab).toHaveAttribute('data-state', 'recording');
 
     // Each marker is roughly 6% of the viewport. The first is below the
@@ -314,13 +292,7 @@ test('compares each candidate against the last kept cut', async () => {
     });
     await page.waitForTimeout(700);
 
-    await tab.hover();
-    await page.getByRole('button', { name: 'Stop recording' }).click();
-    const dialog = page.getByRole('dialog', { name: 'Save video capture' });
-    await expect(dialog).toBeVisible();
-    await dialog.getByLabel('Capture comment').fill('Benchmark cuts');
-    await dialog.getByRole('button', { name: 'Save capture' }).click();
-    await expect(dialog).toHaveCount(0);
+    await saveRecording(page, 'Benchmark cuts');
 
     const [recording] = (await sessionState(cli.ready.apiUrl)).recordings;
     // First, the second marker, last. The first marker adds no cut on its own.
@@ -334,11 +306,7 @@ test('compares each candidate against the last kept cut', async () => {
 test('records chrome-free cuts at desktop, tablet, and mobile sizes', async () => {
   test.setTimeout(180_000);
 
-  const fixture = await startFixture();
-  const { launch, cleanup } = trackSession(
-    fixture,
-    await mkdtemp(join(tmpdir(), 'pnt-record-viewports-')),
-  );
+  const { fixture, launch, cleanup } = await startSession('pnt-record-viewports-');
   const presets = [
     { label: 'desktop', button: /Desktop viewport/, width: 1440, height: 900 },
     { label: 'tablet', button: /Tablet viewport/, width: 768, height: 1024 },
@@ -357,8 +325,7 @@ test('records chrome-free cuts at desktop, tablet, and mobile sizes', async () =
         preset.height,
       ]);
 
-      await page.getByRole('button', { name: 'Start recording' }).click();
-      await expect(tab).toBeVisible();
+      await startRecording(page);
       await expect(tab).toHaveAttribute('data-state', 'recording');
       // The stop control only surfaces on hover.
       await expect(stop).toBeHidden();
@@ -376,10 +343,7 @@ test('records chrome-free cuts at desktop, tablet, and mobile sizes', async () =
       await page.evaluate(() => document.getElementById('record-marker')?.remove());
       await page.waitForTimeout(400);
 
-      await tab.hover();
-      await stop.click();
-      const dialog = page.getByRole('dialog', { name: 'Save video capture' });
-      await expect(dialog).toBeVisible();
+      const dialog = await stopRecording(page);
       expect(await page.evaluate(() => getComputedStyle(document.body).paddingTop)).toBe('64px');
       await dialog.getByLabel('Capture comment').fill(`${preset.label} recording`);
       await dialog.getByRole('button', { name: 'Save capture' }).click();
@@ -448,25 +412,15 @@ test('records chrome-free cuts at desktop, tablet, and mobile sizes', async () =
 test('reviews, edits, and deletes a saved video capture', async () => {
   test.setTimeout(180_000);
 
-  const fixture = await startFixture();
-  const { launch, cleanup } = trackSession(
-    fixture,
-    await mkdtemp(join(tmpdir(), 'pnt-record-review-')),
-  );
+  const { fixture, launch, cleanup } = await startSession('pnt-record-review-');
 
   try {
     const { cli, page } = await launch({ url: fixture.url, sessionId: 'record-review' });
 
-    await page.getByRole('button', { name: 'Start recording' }).click();
+    await startRecording(page);
     await page.locator('#app-button').click();
     await page.waitForTimeout(500);
-    await page.getByRole('region', { name: 'Recording controls' }).hover();
-    await page.getByRole('button', { name: 'Stop recording' }).click();
-    const capture = page.getByRole('dialog', { name: 'Save video capture' });
-    await expect(capture).toBeVisible();
-    await capture.getByLabel('Capture comment').fill('Jump here');
-    await capture.getByRole('button', { name: 'Save capture' }).click();
-    await expect(capture).toHaveCount(0);
+    await saveRecording(page, 'Jump here');
 
     const [recording] = (await sessionState(cli.ready.apiUrl)).recordings;
     const cutPaths = recording.cuts.map((cut) => cut.imagePath);
@@ -508,8 +462,7 @@ test('reviews, edits, and deletes a saved video capture', async () => {
 test('screenshot captures save or delete through the shared capture modal', async () => {
   test.setTimeout(120_000);
 
-  const fixture = await startFixture();
-  const { launch, cleanup } = trackSession(fixture, await mkdtemp(join(tmpdir(), 'pnt-capture-modal-')));
+  const { fixture, launch, cleanup } = await startSession('pnt-capture-modal-');
 
   try {
     const { cli, page, artifactsDir } = await launch({ url: fixture.url, sessionId: 'capture-modal' });
@@ -565,21 +518,16 @@ test('screenshot captures save or delete through the shared capture modal', asyn
 test('deleting or dismissing an unsaved recording draft removes its cuts', async () => {
   test.setTimeout(180_000);
 
-  const fixture = await startFixture();
-  const { launch, cleanup } = trackSession(fixture, await mkdtemp(join(tmpdir(), 'pnt-draft-delete-')));
+  const { fixture, launch, cleanup } = await startSession('pnt-draft-delete-');
 
   try {
     const { cli, page, artifactsDir } = await launch({ url: fixture.url, sessionId: 'draft-delete' });
 
     const record = async () => {
-      await page.getByRole('button', { name: 'Start recording' }).click();
+      await startRecording(page);
       await page.locator('#app-button').click();
       await page.waitForTimeout(450);
-      await page.getByRole('region', { name: 'Recording controls' }).hover();
-      await page.getByRole('button', { name: 'Stop recording' }).click();
-      const dialog = page.getByRole('dialog', { name: 'Save video capture' });
-      await expect(dialog).toBeVisible();
-      return dialog;
+      return stopRecording(page);
     };
     const draftCutsDir = async () => {
       const state = await sessionState(cli.ready.apiUrl);
@@ -618,16 +566,11 @@ test('deleting or dismissing an unsaved recording draft removes its cuts', async
 test('disconnect or cancellation while recording removes frames and artifacts', async () => {
   test.setTimeout(180_000);
 
-  const fixture = await startFixture();
-  const { launch, cleanup } = trackSession(
-    fixture,
-    await mkdtemp(join(tmpdir(), 'pnt-record-abort-')),
-  );
+  const { fixture, launch, cleanup } = await startSession('pnt-record-abort-');
 
   const start = async (sessionId: string) => {
     const recording = await launch({ url: fixture.url, sessionId });
-    await recording.page.getByRole('button', { name: 'Start recording' }).click();
-    await expect(recording.page.getByRole('region', { name: 'Recording controls' })).toBeVisible();
+    await startRecording(recording.page);
     await expect
       .poll(async () => (await readdir(recording.artifactsDir)).some((name) => name.startsWith('.frames-')))
       .toBe(true);
@@ -651,10 +594,9 @@ test('disconnect or cancellation while recording removes frames and artifacts', 
 test('recording reports FFmpeg problems and never saves a partial capture', async () => {
   test.setTimeout(180_000);
 
-  const fixture = await startFixture();
-  const profileDir = await mkdtemp(join(tmpdir(), 'pnt-ffmpeg-'));
+  const session = await startSession('pnt-ffmpeg-');
+  const { fixture, profileDir } = session;
   const failingDir = await mkdtemp(join(tmpdir(), 'pnt-ffmpeg-fail-'));
-  const session = trackSession(fixture, profileDir);
 
   try {
     // Missing FFmpeg is reported before any recording starts.
@@ -692,7 +634,7 @@ test('recording reports FFmpeg problems and never saves a partial capture', asyn
     });
     const { page, artifactsDir } = failing;
 
-    await page.getByRole('button', { name: 'Start recording' }).click();
+    await startRecording(page);
     await page.locator('#app-button').click();
     await page.waitForTimeout(400);
     await page.getByRole('region', { name: 'Recording controls' }).hover();

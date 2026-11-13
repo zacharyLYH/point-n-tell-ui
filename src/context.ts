@@ -27,10 +27,7 @@ function isAppApi(request: Request, overlayApiUrl?: string): boolean {
 
 function redactRecord(values: Record<string, string>): Record<string, string> {
   return Object.fromEntries(
-    Object.entries(values).map(([name, value]) => [
-      name,
-      SENSITIVE.test(name) ? '[REDACTED]' : value,
-    ]),
+    Object.entries(values).map(([name, value]) => [name, SENSITIVE.test(name) ? '[REDACTED]' : value]),
   );
 }
 
@@ -163,60 +160,42 @@ export function watchPage(page: Page, appUrl: string, overlayApiUrl?: string) {
       page.context().cookies(),
     ]);
 
-    const snapshot: SessionSnapshot = {
+    const redact = options.redactCredentials;
+    const scrub = <T extends { url?: string }>(entry: T): T =>
+      redact && entry.url ? { ...entry, url: redactUrl(entry.url) } : entry;
+    const headers = (values: Record<string, string>) =>
+      redact ? redactRecord(values) : { ...values };
+
+    return {
       capturedAt: new Date().toISOString(),
       appUrl,
       pageUrl: pageInfo.pageUrl,
       viewport: { ...options.viewport },
       userAgent: pageInfo.userAgent,
-      console: consoleEntries.map((entry) => ({ ...entry })),
-      network: networkEntries.map((entry) => ({ ...entry })),
+      console: consoleEntries.map(scrub),
+      network: networkEntries.map((entry) => ({
+        ...scrub(entry),
+        requestHeaders: headers(entry.requestHeaders),
+        responseHeaders: headers(entry.responseHeaders),
+      })),
       accessibility,
       storage: {
-        localStorage: { ...pageInfo.localStorage },
-        sessionStorage: { ...pageInfo.sessionStorage },
-        cookies: cookies.map((cookie) => ({
-          name: cookie.name,
-          value: cookie.value,
-          domain: cookie.domain,
-          path: cookie.path,
-          httpOnly: cookie.httpOnly,
-          secure: cookie.secure,
+        localStorage: headers(pageInfo.localStorage),
+        sessionStorage: headers(pageInfo.sessionStorage),
+        cookies: cookies.map(({ name, value, domain, path, httpOnly, secure }) => ({
+          name,
+          value: redact ? '[REDACTED]' : value,
+          domain,
+          path,
+          httpOnly,
+          secure,
         })),
         indexedDb: [...pageInfo.indexedDb],
       },
-      diagnostics: diagnostics.map((entry) => ({ ...entry })),
-      redactCredentials: options.redactCredentials,
-    };
-
-    if (!options.redactCredentials) {
-      return snapshot;
-    }
-
-    return {
-      ...snapshot,
-      console: snapshot.console.map((entry) => ({
-        ...entry,
-        url: entry.url ? redactUrl(entry.url) : undefined,
-      })),
-      network: snapshot.network.map((entry) => ({
-        ...entry,
-        url: redactUrl(entry.url),
-        requestHeaders: redactRecord(entry.requestHeaders),
-        responseHeaders: redactRecord(entry.responseHeaders),
-      })),
-      storage: {
-        ...snapshot.storage,
-        localStorage: redactRecord(snapshot.storage.localStorage),
-        sessionStorage: redactRecord(snapshot.storage.sessionStorage),
-        cookies: snapshot.storage.cookies.map((cookie) => ({ ...cookie, value: '[REDACTED]' })),
-      },
-      diagnostics: snapshot.diagnostics.map((entry) => ({
-        ...entry,
-        url: entry.url ? redactUrl(entry.url) : undefined,
-      })),
+      diagnostics: diagnostics.map(scrub),
+      redactCredentials: redact,
     };
   }
 
-  return { capture };
+  return capture;
 }

@@ -5,10 +5,13 @@ import { createServer as createPortServer } from 'node:net';
 // across runs. Tests run serially, so the port is bound and released per test.
 const FIXTURE_PORT = Number(process.env.PNT_FIXTURE_PORT ?? 45123);
 
-export const FIXTURE = `<!doctype html>
+const page = (title: string, body: string) => `<!doctype html>
 <html>
-  <head><title>PNT Fixture</title></head>
-  <body style="margin:0;padding:24px;font:14px system-ui">
+  <head><title>${title}</title></head>
+  ${body}
+</html>`;
+
+export const FIXTURE = page('PNT Fixture', `<body style="margin:0;padding:24px;font:14px system-ui">
     <h1>PNT Fixture</h1>
     <p>Page viewport: <strong id="dims"></strong></p>
     <button id="app-button" onclick="document.body.dataset.clicked='yes'">App button</button>
@@ -26,26 +29,18 @@ export const FIXTURE = `<!doctype html>
         localStorage.setItem('pnt-initialized', 'yes');
       }
     </script>
-  </body>
-</html>`;
+  </body>`);
 
-export const PREVIEW_FIXTURE = `<!doctype html>
-<html>
-  <head><title>PNT Preview Fixture</title></head>
-  <body style="margin:0;background:rgb(255,255,255);font:14px system-ui">
+export const PREVIEW_FIXTURE = page('PNT Preview Fixture', `<body style="margin:0;background:rgb(255,255,255);font:14px system-ui">
     <h1>PNT Preview Fixture</h1>
     <div id="target" style="position:absolute;top:200px;right:32px;width:120px;height:80px">
       <div style="position:absolute;top:0;left:0;width:60px;height:80px;background:rgb(220,38,38)"></div>
       <div style="position:absolute;top:0;left:60px;width:60px;height:80px;background:rgb(37,99,235)"></div>
     </div>
     <div style="height:2400px"></div>
-  </body>
-</html>`;
+  </body>`);
 
-export const CONTEXT_FIXTURE = `<!doctype html>
-<html>
-  <head><title>PNT Context Fixture</title></head>
-  <body style="margin:0;padding:24px;font:14px system-ui">
+export const CONTEXT_FIXTURE = page('PNT Context Fixture', `<body style="margin:0;padding:24px;font:14px system-ui">
     <h1>PNT Context Fixture</h1>
     <main aria-label="Context checks"><p>Session context is collected here.</p></main>
     <script>
@@ -64,24 +59,16 @@ export const CONTEXT_FIXTURE = `<!doctype html>
         body: JSON.stringify({ password: 'body-secret' }),
       });
     </script>
-  </body>
-</html>`;
+  </body>`);
 
-export const SCROLL_FIXTURE = `<!doctype html>
-<html>
-  <head><title>PNT Scroll Fixture</title></head>
-  <body style="margin:0;padding:24px;font:14px system-ui">
+export const SCROLL_FIXTURE = page('PNT Scroll Fixture', `<body style="margin:0;padding:24px;font:14px system-ui">
     <h1>PNT Scroll Fixture</h1>
     <p>This page is long enough to test captures taken at the bottom.</p>
     <div id="bottom-target" style="position:absolute;top:3400px;left:40px;width:240px;height:120px;background:rgb(16,185,129);color:white;padding:12px;box-sizing:border-box;font-weight:600">Bottom target</div>
     <div style="height:4000px"></div>
-  </body>
-</html>`;
+  </body>`);
 
-export const SECRETS_FIXTURE = `<!doctype html>
-<html>
-  <head><title>PNT Secrets Fixture</title></head>
-  <body style="margin:0;padding:24px;font:14px system-ui">
+export const SECRETS_FIXTURE = page('PNT Secrets Fixture', `<body style="margin:0;padding:24px;font:14px system-ui">
     <h1>PNT Secrets Fixture</h1>
     <p>Storage and request metadata contain credential-like names.</p>
     <script>
@@ -101,8 +88,7 @@ export const SECRETS_FIXTURE = `<!doctype html>
         },
       });
     </script>
-  </body>
-</html>`;
+  </body>`);
 
 export async function freePort(): Promise<number> {
   const server = createPortServer();
