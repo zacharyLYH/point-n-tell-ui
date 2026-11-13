@@ -83,9 +83,3 @@ Exercise concurrent sessions and session behavior after browser disconnect, CLI 
 
 - Concurrent sessions can use different viewport sizes, captures retain the viewport selected for their session, and operations against one explicit session ref do not affect the other session.
 - Disconnect, cancellation, and crash scenarios produce the cleanup and retention outcomes in the README's session lifecycle table.
-
-## Open decisions to resolve in the relevant slice
-
-- Default WebP quality for text/marker fidelity versus disk use (slice 2).
-- Frame-index detail needed for useful, low-cost agent selection (slice 6).
-- Validate the 1% pixel-diff threshold, 500 ms minimum interval, and safeguards for active screens (slice 6).

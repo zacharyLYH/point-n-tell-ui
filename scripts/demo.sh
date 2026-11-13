@@ -3,11 +3,11 @@ set -eu
 
 PROJECT_ROOT=$(CDPATH= cd "$(dirname "$0")/.." && pwd)
 PORT=${PNT_DEMO_PORT:-4173}
-STATE_DIR=${PNT_DEMO_STATE_DIR:-"$PROJECT_ROOT/.demo-state"}
+STATE_DIR=${PNT_DEMO_STATE_DIR:-"$HOME/.point-n-tell-ui/demo"}
 
 # A demo run starts from a clean slate so stale sessions, artifacts, and the
-# sample SQLite database do not leak into the next run. The directory is
-# gitignored and kept after exit so the session can be inspected.
+# sample SQLite database do not leak into the next run. The directory lives
+# outside the repo and is kept after exit so the session can be inspected.
 rm -rf "$STATE_DIR"
 mkdir -p "$STATE_DIR"
 cd "$PROJECT_ROOT"
@@ -38,7 +38,7 @@ until curl --fail --silent "http://127.0.0.1:$PORT/__pnt_demo_health" >/dev/null
   sleep 0.1
 done
 
-echo "Demo state: $STATE_DIR (gitignored, kept after exit)"
+echo "Demo state: $STATE_DIR (kept after exit)"
 
 PNT_ARTIFACTS_DIR="$STATE_DIR/artifacts" \
 PNT_PROFILE_DIR="$STATE_DIR/chromium-profile" \

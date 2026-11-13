@@ -26,14 +26,13 @@ export function useAction() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
 
-  const run = async <T,>(action: () => Promise<T>): Promise<T | undefined> => {
+  const run = async (action: () => Promise<unknown>): Promise<void> => {
     setBusy(true);
     setError(undefined);
     try {
-      return await action();
+      await action();
     } catch (reason) {
       setError(errorMessage(reason));
-      return undefined;
     } finally {
       setBusy(false);
     }

@@ -4,6 +4,13 @@ export const PRESETS = {
   mobile: { width: 390, height: 844 },
 } as const;
 
+/**
+ * Point and Tell's top band. The toolbar lives here, and recording swaps it for
+ * a recording bar. Frames start below the band, so the app never has to be
+ * cropped mid-scroll: the band is chrome, not app pixels.
+ */
+export const TOP_BAND = 64;
+
 export type PresetName = keyof typeof PRESETS;
 export type ViewportPreset = PresetName | 'custom';
 
@@ -34,10 +41,55 @@ export type Selection = {
   imagePath: string;
 };
 
+export type Cut = {
+  cutId: string;
+  number: number;
+  timestamp: string;
+  imagePath: string;
+  diffScore: number;
+  tags: string[];
+};
+
+export type Recording = {
+  recordingId: string;
+  comment: string;
+  startedAt: string;
+  endedAt: string;
+  durationMs: number;
+  viewport: ViewportSpec;
+  page: { url: string };
+  cuts: Cut[];
+};
+
+export type Frame = { timestamp: string; click?: boolean };
+
+export type CaptureHandle = {
+  stop: () => Promise<Frame[]>;
+  dispose: () => Promise<void>;
+};
+
+export type RecordingPhase =
+  | { phase: 'idle' }
+  | { phase: 'starting'; recordingId: string; startedAt: string }
+  | { phase: 'recording'; recordingId: string; startedAt: string }
+  | { phase: 'stopping'; recordingId: string; startedAt: string }
+  | { phase: 'stopped'; recordingId: string; startedAt: string }
+  | { phase: 'processing'; recordingId: string; startedAt: string }
+  | { phase: 'draft'; recording: Recording };
+
+/** A captured but unsaved capture. The source video is already gone. */
+export type CaptureDraft =
+  | { kind: 'selection'; selection: Selection }
+  | { kind: 'recording'; recording: Recording };
+
+export type CaptureResult = { state: SessionState; draft: CaptureDraft };
+
 export type SessionState = {
   session: SessionContext;
   viewport: ViewportSpec;
   selections: Selection[];
+  recordings: Recording[];
+  recording: RecordingPhase;
 };
 
 export type ReviewContext = {
@@ -108,15 +160,6 @@ export type SessionSnapshot = {
   redactCredentials: boolean;
 };
 
-export type FrameIndexEntry = {
-  frameId: string;
-  number: number;
-  timestamp: string;
-  imagePath: string;
-  diffScore: number;
-  tags: string[];
-};
-
 export type ContextArtifacts = {
   console: string;
   network: string;
@@ -131,8 +174,8 @@ export type SubmissionResult = {
   selectionIds: string[];
   selectionCount: number;
   imagePaths: string[];
-  frameIndex: FrameIndexEntry[];
   selections: Selection[];
+  recordings: Recording[];
   context: SessionSnapshot;
   artifactsDir: string;
   contextArtifacts: ContextArtifacts;

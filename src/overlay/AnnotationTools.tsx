@@ -3,7 +3,6 @@ import { Eraser, PenLine, Redo2, Save, Square, Undo2, X } from 'lucide-react';
 import type { AnnotationAction, AnnotationState } from './useAnnotation.js';
 import { IconButton } from './IconButton.js';
 import { Separator } from '../components/ui/separator.js';
-import { Textarea } from '../components/ui/textarea.js';
 
 export function AnnotationTools({
   state,
@@ -18,8 +17,8 @@ export function AnnotationTools({
   onCancel: () => void;
   onSave: () => void;
 }) {
-  const { rectangle, tool, strokes, redoStrokes, comment } = state;
-  const canSave = Boolean(rectangle && rectangle.width >= 4 && rectangle.height >= 4 && comment.trim());
+  const { rectangle, tool, strokes, redoStrokes } = state;
+  const canSave = Boolean(rectangle && rectangle.width >= 4 && rectangle.height >= 4);
 
   return (
     <div className="flex w-max shrink-0 items-center gap-1.5">
@@ -39,18 +38,10 @@ export function AnnotationTools({
         <Eraser aria-hidden="true" />
       </IconButton>
       <Separator orientation="vertical" className="mx-1 h-7" />
-      <Textarea
-        aria-label="Selection comment"
-        value={comment}
-        onChange={(event) => dispatch({ type: 'comment', value: event.target.value })}
-        maxLength={5000}
-        placeholder="Add a note…"
-        className="h-9 min-h-9 w-48 resize-none bg-background py-2 text-xs"
-      />
       <IconButton content="Cancel" label="Cancel annotation" variant="ghost" onClick={onCancel}>
         <X aria-hidden="true" />
       </IconButton>
-      <IconButton content="Save selection" label="Save selection" disabled={busy || !canSave} onClick={onSave}>
+      <IconButton content="Capture selection" label="Capture selection" disabled={busy || !canSave} onClick={onSave}>
         <Save aria-hidden="true" />
       </IconButton>
     </div>

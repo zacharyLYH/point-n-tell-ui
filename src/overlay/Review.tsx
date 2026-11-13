@@ -1,7 +1,8 @@
 import { useRef, useState } from 'react';
 import { Camera, PencilLine, Send, Trash2 } from 'lucide-react';
-import type { ReviewContext, Selection, SessionState, SubmissionResult } from '../types.js';
+import type { Recording, ReviewContext, Selection, SessionState, SubmissionResult, ViewportSpec } from '../types.js';
 import { sendJson, useAction } from './api.js';
+import { CutCarousel, cutImages } from './CutCarousel.js';
 import { Alert } from '../components/ui/alert.js';
 import { Badge } from '../components/ui/badge.js';
 import { Button } from '../components/ui/button.js';
@@ -11,6 +12,44 @@ import { Separator } from '../components/ui/separator.js';
 import { Switch } from '../components/ui/switch.js';
 import { Textarea } from '../components/ui/textarea.js';
 import { cn } from '../lib/utils.js';
+
+/** Screenshot selections and video recordings share one review list. */
+type Item = {
+  id: string;
+  kind: 'selection' | 'recording';
+  label: string;
+  comment: string;
+  images: { id: string; label: string }[];
+  viewport: ViewportSpec;
+  url: string;
+  selection?: Selection;
+  recording?: Recording;
+};
+
+function itemsOf(state: SessionState): Item[] {
+  return [
+    ...state.selections.map((selection, index) => ({
+      id: selection.selectionId,
+      kind: 'selection' as const,
+      label: `Selection ${index + 1}`,
+      comment: selection.comment,
+      images: [{ id: selection.selectionId, label: 'Screenshot' }],
+      viewport: selection.viewport,
+      url: selection.page.url,
+      selection,
+    })),
+    ...state.recordings.map((recording, index) => ({
+      id: recording.recordingId,
+      kind: 'recording' as const,
+      label: `Recording ${index + 1}`,
+      comment: recording.comment,
+      images: cutImages(recording),
+      viewport: recording.viewport,
+      url: recording.page.url,
+      recording,
+    })),
+  ];
+}
 
 export function Review({
   apiUrl,
@@ -26,41 +65,49 @@ export function Review({
   onReplace: (selection: Selection) => void;
 }) {
   const [state, setState] = useState(initial);
-  const [requestedId, setRequestedId] = useState(initial.selections[0]?.selectionId);
-  const [draft, setDraft] = useState<{ id?: string; text: string }>();
+  const [requestedId, setRequestedId] = useState(
+    initial.selections[0]?.selectionId ?? initial.recordings[0]?.recordingId,
+  );
+  const [draft, setDraft] = useState<string>();
   const [redactCredentials, setRedactCredentials] = useState(true);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const { busy, error, run } = useAction();
   const navRef = useRef<HTMLElement>(null);
 
-  // Removing the last selection falls back to the first remaining one.
-  const selectedId = state.selections.some((item) => item.selectionId === requestedId)
-    ? requestedId
-    : state.selections[0]?.selectionId;
-  const index = state.selections.findIndex((item) => item.selectionId === selectedId);
-  const selected = state.selections[index];
-  const comment = draft?.id === selectedId ? draft.text : selected?.comment ?? '';
+  const items = itemsOf(state);
+  // Removing the last item falls back to the first remaining one.
+  const selected = items.find((item) => item.id === requestedId) ?? items[0];
+  const selection = selected?.selection;
+  const selectedId = selected?.id;
+  const index = items.findIndex((item) => item.id === selectedId);
+  const comment = draft ?? selected?.comment ?? '';
+
+  // A drafted comment belongs to the capture it was typed for.
+  const select = (id: string) => {
+    setRequestedId(id);
+    setDraft(undefined);
+  };
 
   const request = (path: string, body?: unknown, method?: string) =>
     run(async () => {
       setState(await sendJson<SessionState>(`${apiUrl}${path}`, body, method));
+      setDraft(undefined);
     });
 
   // The submit response ends the session server-side; the CLI closes the
   // browser after the manifest has been written.
-  const submit = () =>
-    void run(() => sendJson<SubmissionResult>(`${apiUrl}/submit`, { redactCredentials }));
+  const submit = () => void run(() => sendJson<SubmissionResult>(`${apiUrl}/submit`, { redactCredentials }));
   const discard = () => void run(() => sendJson(`${apiUrl}/discard`));
 
-  const moveSelection = (delta: number) => {
-    const next = state.selections[index + delta];
+  const moveItem = (delta: number) => {
+    const next = items[index + delta];
     if (!next) {
       return;
     }
-    setRequestedId(next.selectionId);
+    select(next.id);
     if (navRef.current?.contains(document.activeElement)) {
       requestAnimationFrame(() => {
-        navRef.current?.querySelector<HTMLButtonElement>(`[data-selection-id="${next.selectionId}"]`)?.focus();
+        navRef.current?.querySelector<HTMLButtonElement>(`[data-capture-id="${next.id}"]`)?.focus();
       });
     }
   };
@@ -78,16 +125,16 @@ export function Review({
             return;
           }
           event.preventDefault();
-          moveSelection(event.key === 'ArrowDown' ? 1 : -1);
+          moveItem(event.key === 'ArrowDown' ? 1 : -1);
         }}
       >
         <DialogTitle className="sr-only">Session summary</DialogTitle>
-        <DialogDescription className="sr-only">Review saved selections before submitting.</DialogDescription>
+        <DialogDescription className="sr-only">Review saved captures before submitting.</DialogDescription>
         <header className="flex flex-wrap items-center gap-2 px-3 py-2">
           <div className="min-w-0 flex-1">
             <h1 className="truncate text-sm font-semibold">{state.session.chatTitle}</h1>
             <p className="truncate text-[11px] text-muted-foreground">
-              {state.selections.length} included · {state.session.sessionRef}
+              {items.length} included · {state.session.sessionRef}
             </p>
           </div>
           <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
@@ -107,13 +154,7 @@ export function Review({
               <span className="text-[11px] text-muted-foreground">
                 Discard session and delete captures?
               </span>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                disabled={busy}
-                onClick={() => setConfirmDiscard(false)}
-              >
+              <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => setConfirmDiscard(false)}>
                 Cancel
               </Button>
               <Button type="button" variant="destructive" size="sm" disabled={busy} onClick={discard}>
@@ -134,12 +175,7 @@ export function Review({
               >
                 Discard
               </Button>
-              <Button
-                type="button"
-                size="sm"
-                disabled={busy || state.selections.length === 0}
-                onClick={submit}
-              >
+              <Button type="button" size="sm" disabled={busy || items.length === 0} onClick={submit}>
                 <Send aria-hidden="true" />
                 Submit
               </Button>
@@ -154,73 +190,77 @@ export function Review({
             aria-label="Saved selections"
             className="flex flex-col gap-1 border-b p-2 lg:overflow-y-auto lg:border-b-0 lg:border-r"
           >
-            {state.selections.map((item, itemIndex) => {
+            {items.map((item) => {
               // A capture from another page cannot be compared at all.
-              const otherUrl = item.page.url !== context.url;
-              const active = item.selectionId === selectedId;
+              const otherUrl = item.url !== context.url;
+              const active = item.id === selectedId;
               return (
                 <Button
-                  key={item.selectionId}
+                  key={item.id}
                   type="button"
-                  data-selection-id={item.selectionId}
+                  data-capture-id={item.id}
                   variant={active ? 'secondary' : 'ghost'}
                   aria-current={active ? 'true' : undefined}
-                  onClick={() => setRequestedId(item.selectionId)}
+                  onClick={() => select(item.id)}
                   className={cn(
                     'h-auto w-full shrink-0 justify-start gap-2 rounded-lg border p-2 text-left font-normal',
                     active && 'border-primary',
                   )}
                 >
                   <img
-                    src={`${apiUrl}/selection/${item.selectionId}/image`}
+                    src={`${apiUrl}/image/${item.images[0].id}`}
                     alt=""
                     className="h-14 w-16 shrink-0 rounded object-cover"
                   />
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-xs font-medium">Selection {itemIndex + 1}</span>
+                    <span className="block truncate text-xs font-medium">{item.label}</span>
                     <span className="block truncate text-[11px] text-muted-foreground">{item.comment}</span>
                     <span className="mt-1 flex flex-wrap gap-1">
                       <Badge variant="secondary">Included</Badge>
+                      {item.kind === 'recording' && (
+                        <Badge variant="outline" data-testid="cut-count">{item.images.length} cuts</Badge>
+                      )}
                       {otherUrl && (
                         <Badge
                           variant="outline"
                           title="Can't check if context changed: this capture is from a different URL"
-                        >Can't check context</Badge>
+                        >
+                          Can't check context
+                        </Badge>
                       )}
                     </span>
                   </span>
                 </Button>
               );
             })}
-            {state.selections.length === 0 && (
-              <p className="p-3 text-xs text-muted-foreground">No selections remain.</p>
-            )}
+            {items.length === 0 && <p className="p-3 text-xs text-muted-foreground">No captures remain.</p>}
           </nav>
 
-          <section aria-label="Screenshot preview" className="flex min-h-0 flex-col border-b p-3 lg:border-b-0 lg:border-r">
+          <section aria-label="Capture preview" className="flex min-h-0 flex-col border-b p-3 lg:border-b-0 lg:border-r">
             {selected ? (
               <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto rounded-lg bg-muted p-2">
-                <img
-                  src={`${apiUrl}/selection/${selected.selectionId}/image`}
-                  alt={`Selection ${index + 1} screenshot`}
-                  className="max-h-full max-w-full rounded border object-contain shadow-sm"
-                />
+                <CutCarousel key={selected.id} apiUrl={apiUrl} images={selected.images} />
               </div>
             ) : (
-              <p className="text-xs text-muted-foreground">No selection selected.</p>
+              <p className="text-xs text-muted-foreground">No capture selected.</p>
             )}
           </section>
 
-          <aside aria-label="Selection details" className="flex min-h-0 flex-col">
+          <aside aria-label="Capture details" className="flex min-h-0 flex-col">
             {selected && (
               <>
                 <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
                   <div className="flex items-center justify-between gap-2">
-                    <h2 className="text-xs font-semibold">Selection {index + 1}</h2>
+                    <h2 className="text-xs font-semibold">{selected.label}</h2>
                     <Badge variant="secondary" className="shrink-0 capitalize">
                       {selected.viewport.preset}
                     </Badge>
                   </div>
+                  {selected.recording && (
+                    <p className="text-[11px] text-muted-foreground" data-testid="recording-stats">
+                      {selected.images.length} cuts · {selected.recording.durationMs} ms · saved recording, no retake
+                    </p>
+                  )}
 
                   <div className="space-y-2">
                     <div className="flex items-center justify-between">
@@ -234,9 +274,9 @@ export function Review({
                     </div>
                     <Textarea
                       id="pnt-review-comment"
-                      aria-label="Selection comment"
+                      aria-label="Capture comment"
                       value={comment}
-                      onChange={(event) => setDraft({ id: selectedId, text: event.target.value })}
+                      onChange={(event) => setDraft(event.target.value)}
                       maxLength={5000}
                       className="min-h-24 resize-y border-ring/40 bg-muted/40 text-xs leading-relaxed shadow-sm hover:border-ring"
                     />
@@ -246,9 +286,7 @@ export function Review({
                         variant="secondary"
                         size="sm"
                         disabled={busy || !comment.trim() || comment.trim() === selected.comment}
-                        onClick={() =>
-                          void request(`/selection/${selected.selectionId}`, { comment: comment.trim() }, 'PATCH')
-                        }
+                        onClick={() => void request(`/${selected.kind}/${selected.id}`, { comment: comment.trim() }, 'PATCH')}
                       >
                         Save comment
                       </Button>
@@ -264,17 +302,19 @@ export function Review({
                     type="button"
                     variant="destructive"
                     size="sm"
-                    aria-label="Delete selection"
+                    aria-label={`Delete ${selected.kind}`}
                     disabled={busy}
-                    onClick={() => void request(`/selection/${selected.selectionId}`, undefined, 'DELETE')}
+                    onClick={() => void request(`/${selected.kind}/${selected.id}`, undefined, 'DELETE')}
                   >
                     <Trash2 aria-hidden="true" />
                     Delete
                   </Button>
-                  <Button type="button" variant="outline" size="sm" onClick={() => onReplace(selected)}>
-                    <Camera aria-hidden="true" />
-                    Capture again
-                  </Button>
+                  {selection && (
+                    <Button type="button" variant="outline" size="sm" onClick={() => onReplace(selection)}>
+                      <Camera aria-hidden="true" />
+                      Capture again
+                    </Button>
+                  )}
                 </div>
               </>
             )}

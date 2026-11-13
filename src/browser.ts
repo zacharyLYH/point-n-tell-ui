@@ -1,8 +1,14 @@
 import { mkdir, writeFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { chromium, type BrowserContext, type CDPSession, type Page } from 'playwright';
 import { watchPage } from './context.js';
-import { PRESETS, type SessionSnapshot, type ViewportSpec } from './types.js';
+import {
+  PRESETS,
+  type CaptureHandle,
+  type Frame,
+  type SessionSnapshot,
+  type ViewportSpec,
+} from './types.js';
 
 const REVIEW_CONTENT = { width: 1280, height: 800 };
 
@@ -18,6 +24,7 @@ export async function launchApp(options: {
   page: Page;
   setViewport: (viewport: { width: number; height: number }) => Promise<{ width: number; height: number }>;
   expandForReview: () => Promise<void>;
+  subscribeClicks: (listener: () => void) => () => void;
   captureContext: (options: {
     redactCredentials: boolean;
     viewport: ViewportSpec;
@@ -41,6 +48,30 @@ export async function launchApp(options: {
     handleSIGTERM: false,
     handleSIGHUP: false,
   });
+
+  const clickListeners = new Set<() => void>();
+  await context.exposeBinding('__pntRecordClick', () => {
+    for (const listener of clickListeners) listener();
+  });
+  await context.addInitScript(() => {
+    window.addEventListener(
+      'click',
+      (event) => {
+        const path = event.composedPath();
+        if (path.some((node) => node instanceof HTMLElement && node.id === 'pnt-ui-root')) {
+          return;
+        }
+        (window as unknown as { __pntRecordClick?: () => void }).__pntRecordClick?.();
+      },
+      true,
+    );
+  });
+  const subscribeClicks = (listener: () => void) => {
+    clickListeners.add(listener);
+    return () => {
+      clickListeners.delete(listener);
+    };
+  };
 
   const [first, ...extra] = context.pages();
   const page = first ?? (await context.newPage());
@@ -134,11 +165,116 @@ export async function launchApp(options: {
     context,
     page,
     setViewport,
+    subscribeClicks,
     captureContext: (captureOptions) => contextWatcher.capture(captureOptions),
     expandForReview: async () => {
       // Review uses the browser content area, so give it room on small presets.
       await resizeWindow(REVIEW_CONTENT);
       await cdp.send('Emulation.clearDeviceMetricsOverride');
+    },
+  };
+}
+
+const SAMPLE_MS = 150;
+const CLICK_SETTLE_MS = 150;
+const CAPTURE_TIMEOUT_MS = 5_000;
+
+const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+function within<T>(work: Promise<T>, message: string): Promise<T> {
+  return Promise.race([
+    work,
+    delay(CAPTURE_TIMEOUT_MS).then(() => {
+      throw new Error(message);
+    }),
+  ]);
+}
+
+/**
+ * Captures the app area every 150ms plus once per click. One handle owns the
+ * CDP session, sampler, screenshot queue, and click subscription for exactly
+ * one recording. Point and Tell's opaque 64px band is cropped out by FFmpeg.
+ */
+export async function startCapture(
+  page: Page,
+  framesDir: string,
+  subscribeClicks: (listener: () => void) => () => void,
+): Promise<CaptureHandle> {
+  await mkdir(framesDir, { recursive: true });
+  const frames: Frame[] = [];
+  const cdp: CDPSession = await page.context().newCDPSession(page);
+  let stopping = false;
+  let closed = false;
+  let failure: unknown;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let queue: Promise<void> = Promise.resolve();
+  const pendingClicks = new Set<Promise<void>>();
+
+  const capture = (click = false): Promise<void> => {
+    if (closed) return Promise.resolve();
+    queue = queue
+      .then(async () => {
+        if (closed) return;
+        const timestamp = new Date().toISOString();
+        // Full-viewport capture, no clip: clipping changes the emulated viewport
+        // size in Chrome. FFmpeg crops the reserved Point and Tell band instead.
+        const shot = await cdp.send('Page.captureScreenshot', { format: 'jpeg', quality: 80 });
+        await writeFile(
+          join(framesDir, `${String(frames.length + 1).padStart(6, '0')}.jpg`),
+          Buffer.from(shot.data, 'base64'),
+        );
+        frames.push({ timestamp, ...(click ? { click: true } : {}) });
+      })
+      .catch((error) => {
+        failure ??= error;
+      });
+    return queue;
+  };
+
+  const tick = async () => {
+    if (stopping) return;
+    if (pendingClicks.size === 0) await capture();
+    if (!stopping && !failure) timer = setTimeout(tick, SAMPLE_MS);
+  };
+
+  const unsubscribe = subscribeClicks(() => {
+    if (stopping) return;
+    // A click becomes a forced cut after the page settles. Periodic samples
+    // pause until that capture is queued.
+    const settled = delay(CLICK_SETTLE_MS).then(() => capture(true));
+    pendingClicks.add(settled);
+    void settled.then(() => pendingClicks.delete(settled));
+  });
+
+  let drain: Promise<Frame[]> | undefined;
+  const stop = () =>
+    (drain ??= (async () => {
+      stopping = true;
+      unsubscribe();
+      if (timer) clearTimeout(timer);
+      try {
+        await within(Promise.all(pendingClicks), 'Recording did not stop in time');
+        await within(queue, 'Recording did not stop in time');
+        if (failure) throw failure;
+        return frames;
+      } finally {
+        closed = true;
+        unsubscribe();
+        await cdp.detach().catch(() => undefined);
+      }
+    })());
+
+  await capture();
+  if (failure) {
+    await stop().catch(() => undefined);
+    throw failure;
+  }
+  timer = setTimeout(tick, SAMPLE_MS);
+
+  return {
+    stop,
+    dispose: async () => {
+      await stop().catch(() => undefined);
     },
   };
 }
@@ -150,12 +286,10 @@ export async function closeApp(context: BrowserContext): Promise<void> {
 async function setCaptureChrome(page: Page, hidden: boolean) {
   const viewport = await page.evaluate((hidden) => {
     const root = document.querySelector('#pnt-ui-root')?.shadowRoot;
+    // The toolbar is absent while the review or capture dialog replaces it.
     const controls = root?.getElementById('pnt-controls');
-    if (!controls) {
-      throw new Error('Point and Tell controls are unavailable');
-    }
     const chrome = [
-      controls,
+      ...(controls ? [controls] : []),
       ...Array.from(root?.querySelectorAll('[data-pnt-selection-badge]') ?? []),
     ];
     for (const element of chrome) {
@@ -184,6 +318,34 @@ function pngSize(data: Buffer): { width: number; height: number } {
   return { width: data.readUInt32BE(16), height: data.readUInt32BE(20) };
 }
 
+type Region = { x: number; y: number; width: number; height: number };
+
+/**
+ * Writes a region in document coordinates at the emulated viewport resolution.
+ * Chromium returns clip pixels at the host surface resolution, which can differ
+ * from the emulated ratio, so the clip scale is probed once per capture.
+ */
+async function captureRegion(
+  cdp: CDPSession,
+  path: string,
+  region: Region,
+  format: 'webp' | 'jpeg',
+): Promise<void> {
+  const probe = await cdp.send('Page.captureScreenshot', {
+    format: 'png',
+    captureBeyondViewport: false,
+    clip: { ...region, scale: 1 },
+  });
+  const clip = { ...region, scale: region.width / pngSize(Buffer.from(probe.data, 'base64')).width };
+  const shot = await cdp.send('Page.captureScreenshot', {
+    format,
+    ...(format === 'jpeg' ? { quality: 80 } : {}),
+    captureBeyondViewport: false,
+    clip,
+  });
+  await writeFile(resolve(path), Buffer.from(shot.data, 'base64'));
+}
+
 /**
  * Captures the pixels the user sees inside the rectangle.
  *
@@ -210,23 +372,9 @@ export async function saveAnnotatedScreenshot(
       width,
       height,
     };
-    const cdp = await page.context().newCDPSession(page);
+    const cdp: CDPSession = await page.context().newCDPSession(page);
     try {
-      // Chromium returns clip pixels at the host surface resolution, which can
-      // differ from the emulated viewport ratio. Probe once so the saved image
-      // always lands on the emulated resolution instead of the host's.
-      const probe = await cdp.send('Page.captureScreenshot', {
-        format: 'png',
-        captureBeyondViewport: false,
-        clip: { ...region, scale: 1 },
-      });
-      const probeSize = pngSize(Buffer.from(probe.data, 'base64'));
-      const shot = await cdp.send('Page.captureScreenshot', {
-        format: 'webp',
-        captureBeyondViewport: false,
-        clip: { ...region, scale: width / probeSize.width },
-      });
-      await writeFile(resolve(path), Buffer.from(shot.data, 'base64'));
+      await captureRegion(cdp, path, region, 'webp');
     } finally {
       await cdp.detach().catch(() => undefined);
     }

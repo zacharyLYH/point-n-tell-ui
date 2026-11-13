@@ -2,6 +2,7 @@ import { chromium, expect, type Browser, type Page } from '@playwright/test';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { access, rm } from 'node:fs/promises';
 import { join } from 'node:path';
+import { freePort } from './fixtures.js';
 import { ROOT } from './paths.js';
 import type { SessionState } from '../../src/types.js';
 
@@ -16,6 +17,7 @@ export async function launchCli(options: {
   profileDir: string;
   sessionId: string;
   cdpPort: number;
+  env?: Record<string, string>;
 }): Promise<{ child: ChildProcess; ready: Ready; output: () => string }> {
   const child = spawn(
     process.execPath,
@@ -37,6 +39,7 @@ export async function launchCli(options: {
         PNT_HEADLESS: '0',
         PNT_CDP_PORT: String(options.cdpPort),
         PNT_MACHINE: '1',
+        ...options.env,
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     },
@@ -85,13 +88,10 @@ export async function launchCli(options: {
 }
 
 export async function stopCli(child: ChildProcess): Promise<void> {
-  if (child.exitCode !== null) {
-    return;
-  }
-  await new Promise<void>((resolve) => {
-    child.once('exit', () => resolve());
-    child.kill('SIGINT');
-  });
+  // Listen before signalling so an immediate exit cannot be missed.
+  const exited = waitForExit(child);
+  child.kill('SIGINT');
+  await exited;
 }
 
 export async function waitForExit(child: ChildProcess): Promise<void> {
@@ -111,17 +111,46 @@ export async function pathExists(path: string): Promise<boolean> {
 }
 
 /** Tracks a session's browsers and CLI children, then tears everything down. */
-export function trackSession(fixture: { close: () => Promise<void> }, profileDir: string) {
+export function trackSession(fixture: { url: string; close: () => Promise<void> }, profileDir: string) {
   const children: ChildProcess[] = [];
   const browsers: Browser[] = [];
+  const dirs = new Set([profileDir]);
   return {
     children,
     browsers,
+    /** Launches the CLI and connects to its app page, tracked for cleanup. */
+    async launch(options: {
+      sessionId: string;
+      url?: string;
+      env?: Record<string, string>;
+      profileDir?: string;
+    }) {
+      const url = options.url ?? fixture.url;
+      const dir = options.profileDir ?? profileDir;
+      dirs.add(dir);
+      const cli = await launchCli({
+        url,
+        profileDir: dir,
+        sessionId: options.sessionId,
+        cdpPort: await freePort(),
+        env: options.env,
+      });
+      children.push(cli.child);
+      const browser = await connect(cli.ready.cdpUrl);
+      browsers.push(browser);
+      const page = await appPage(browser, url);
+      return {
+        cli,
+        browser,
+        page,
+        artifactsDir: join(dir, 'artifacts', cli.ready.sessionRef),
+      };
+    },
     async cleanup(): Promise<void> {
       for (const browser of browsers) await browser.close().catch(() => undefined);
       for (const child of children) await stopCli(child).catch(() => undefined);
       await fixture.close();
-      await rm(profileDir, { recursive: true, force: true });
+      for (const dir of dirs) await rm(dir, { recursive: true, force: true });
     },
   };
 }
@@ -158,6 +187,22 @@ export async function expectCenteredWindow(page: Page): Promise<void> {
   expect(Math.abs(metrics.y + metrics.height / 2 - metrics.screenHeight / 2)).toBeLessThanOrEqual(40);
 }
 
+/** Captures the drawn rectangle and saves it through the shared capture dialog. */
+export async function captureSelection(page: Page, comment?: string): Promise<void> {
+  const capture = page.getByRole('button', { name: 'Capture selection' });
+  // Fails fast when no rectangle was drawn instead of retrying a disabled click.
+  await expect(capture).toBeEnabled();
+  await capture.click();
+  const dialog = page.getByRole('dialog', { name: 'Save screenshot capture' });
+  await expect(dialog).toBeVisible();
+  if (comment !== undefined) {
+    await dialog.getByLabel('Capture comment').fill(comment);
+  }
+  await dialog.getByRole('button', { name: 'Save capture' }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Start annotation' })).toBeVisible();
+}
+
 export async function drawSelection(
   page: Page,
   comment: string,
@@ -165,13 +210,11 @@ export async function drawSelection(
   to: [number, number],
 ): Promise<void> {
   await page.getByRole('button', { name: 'Start annotation' }).click();
-  await page.getByLabel('Selection comment').fill(comment);
   await page.mouse.move(...from);
   await page.mouse.down();
   await page.mouse.move(...to, { steps: 3 });
   await page.mouse.up();
-  await page.getByRole('button', { name: 'Save selection' }).click();
-  await expect(page.getByRole('button', { name: 'Start annotation' })).toBeVisible();
+  await captureSelection(page, comment);
 }
 
 export async function sessionState(apiUrl: string): Promise<SessionState> {

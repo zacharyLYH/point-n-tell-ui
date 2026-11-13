@@ -60,15 +60,16 @@ export function formatReady({
 
 /**
  * Human-readable submit report: session metadata on top, then one section per
- * included selection. Full console, network, and localStorage payloads live in
+ * included capture. Full console, network, and localStorage payloads live in
  * the artifact JSON files that this report points at.
  */
 export function formatSubmit(manifest: SubmissionResult): string {
   const { session, machine, context, contextArtifacts } = manifest;
   const errors = context.console.filter((entry) => entry.level === 'error').length;
-  const items = manifest.selections.map((selection, index) =>
+  const items = manifest.selections.map((selection) =>
     [
-      ` ${index + 1}  ${oneLine(selection.comment)}`,
+      field('type', 'image'),
+      field('comment', oneLine(selection.comment)),
       field('selection', selection.selectionId),
       field('image', selection.imagePath),
       field('page', selection.page.url),
@@ -77,6 +78,20 @@ export function formatSubmit(manifest: SubmissionResult): string {
         `${selection.viewport.preset} ${selection.viewport.width}x${selection.viewport.height}`,
       ),
       field('created', selection.createdAt),
+    ].join('\n'),
+  );
+  const recordings = manifest.recordings.map((recording) =>
+    [
+      field('type', 'recording'),
+      field('comment', oneLine(recording.comment)),
+      field('recording', recording.recordingId),
+      field('cuts', `${count(recording.cuts.length, 'cut')} (${recording.durationMs} ms)`),
+      field('images', recording.cuts.map((cut) => cut.imagePath).join(' ')),
+      field('page', recording.page.url),
+      field(
+        'viewport',
+        `${recording.viewport.preset} ${recording.viewport.width}x${recording.viewport.height}`,
+      ),
     ].join('\n'),
   );
 
@@ -89,6 +104,7 @@ export function formatSubmit(manifest: SubmissionResult): string {
       ['submitted', manifest.submittedAt],
       ['machine', `${machine.hostname} ${machine.platform}/${machine.arch} node ${machine.node}`],
       ['selections', count(manifest.selectionCount, 'selection')],
+      ['recordings', count(manifest.recordings.length, 'recording')],
       ['artifacts', manifest.artifactsDir],
       [
         'console',
@@ -104,7 +120,7 @@ export function formatSubmit(manifest: SubmissionResult): string {
       ],
     ]),
     RULE,
-    items.join(`\n${DIVIDER}\n`),
+    [...items, ...recordings].join(`\n${DIVIDER}\n`),
     RULE,
   ].join('\n');
 }

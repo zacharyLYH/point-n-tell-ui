@@ -2,8 +2,9 @@ FROM node:22-bookworm
 
 # Xvfb + xauth provide the display; Chromium stays headed so window sizing,
 # CDP emulation, and screenshots exercise the real browser (same as CI).
+# FFmpeg generates recording cut images, so the suite needs it too.
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends xvfb xauth \
+  && apt-get install -y --no-install-recommends xvfb xauth ffmpeg \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

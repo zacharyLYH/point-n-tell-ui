@@ -1,12 +1,20 @@
 import { mkdir, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import type { SessionSnapshot } from './types.js';
+import type { ContextArtifacts, SessionSnapshot } from './types.js';
 
 const MONTH_MS = 30 * 24 * 60 * 60 * 1000;
 
+export function pointAndTellRoot(env = process.env): string {
+  return env.PNT_HOME ?? join(homedir(), '.point-n-tell-ui');
+}
+
 export function artifactsRoot(env = process.env): string {
-  return env.PNT_ARTIFACTS_DIR ?? join(homedir(), '.point-n-tell', 'artifacts');
+  return env.PNT_ARTIFACTS_DIR ?? join(pointAndTellRoot(env), 'artifacts');
+}
+
+export function profileRoot(env = process.env): string {
+  return env.PNT_PROFILE_DIR ?? join(pointAndTellRoot(env), 'chromium-profile');
 }
 
 export function retentionMs(): number {
@@ -15,13 +23,7 @@ export function retentionMs(): number {
 }
 
 export async function cleanupExpiredArtifacts(root: string): Promise<string[]> {
-  let entries;
-  try {
-    entries = await readdir(root, { withFileTypes: true });
-  } catch {
-    return [];
-  }
-
+  const entries = await readdir(root, { withFileTypes: true }).catch(() => []);
   const cutoff = Date.now() - retentionMs();
   const removed: string[] = [];
   for (const entry of entries) {
@@ -42,12 +44,6 @@ export async function cleanupExpiredArtifacts(root: string): Promise<string[]> {
   return removed;
 }
 
-export type ContextArtifactPaths = {
-  console: string;
-  network: string;
-  localStorage: string;
-};
-
 /**
  * Persists the full console, network, and localStorage payloads next to the
  * captured images. These files keep data that is too noisy for CLI output.
@@ -55,7 +51,7 @@ export type ContextArtifactPaths = {
 export async function writeContextArtifacts(
   dir: string,
   context: Pick<SessionSnapshot, 'console' | 'network' | 'storage'>,
-): Promise<ContextArtifactPaths> {
+): Promise<ContextArtifacts> {
   const paths = {
     console: join(dir, 'console.json'),
     network: join(dir, 'network.json'),

@@ -15,7 +15,7 @@ npm ci
 ./scripts/demo.sh
 ```
 
-The script builds Point and Tell, starts a local sample checkout app, then launches the CLI. The final step is a headed Chromium window showing the sample app with the Point and Tell overlay. The sample app has a small SQLite-backed cart/order API, session cookie, request headers, console events, and localStorage credentials so you can exercise capture context and redaction. Try changing viewports, annotating the order summary, applying `NORTHSTAR10`, editing the cart, or placing an order. Press **Ctrl+C** in the terminal to close Chromium and stop the sample server. Its Chromium profile and saved artifacts under the printed `.demo-state/` directory are kept after exit so you can inspect them; the sample SQLite database stays in the temporary directory. The state directory is gitignored, and each run starts from a clean slate. Set `PNT_DEMO_PORT` to use a different local port if `4173` is occupied.
+The script builds Point and Tell, starts a local sample checkout app, then launches the CLI. The final step is a headed Chromium window showing the sample app with the Point and Tell overlay. The sample app has a small SQLite-backed cart/order API, session cookie, request headers, console events, and localStorage credentials so you can exercise capture context and redaction. Try changing viewports, annotating the order summary, applying `NORTHSTAR10`, editing the cart, or placing an order. Press **Ctrl+C** in the terminal to close Chromium and stop the sample server. Its Chromium profile and saved artifacts stay in `~/.point-n-tell-ui/demo/` (printed at startup) so you can inspect them; the sample SQLite database stays in the temporary directory. The demo state lives outside the repo and each run starts from a clean slate. Set `PNT_DEMO_PORT` to use a different local port if `4173` is occupied, or `PNT_DEMO_STATE_DIR` to move the demo state.
 
 ## Run tests
 
@@ -34,14 +34,22 @@ Baselines live in `tests/screenshots/` and are committed. Runs use Playwright's 
 
 - **App mode:** use the page normally.
 - **Annotate mode:**
-  - Draw a rectangle, add a comment, and optionally sketch inside it.
-  - Undo, redo, or clear strokes; cancel or delete a selection.
+  - Draw a rectangle and optionally sketch inside it.
+  - Undo, redo, or clear strokes; cancel before capturing.
   - The page is not dimmed. Input is blocked only while annotating.
-- **Save selection:** captures the screenshot after annotation is complete.
+- **Capture:** the screenshot is taken as soon as you capture, then the shared capture dialog asks for a comment.
   - The image includes a deterministic marker and pen strokes, but not Point and Tell UI.
+  - **Save** stores the capture with its comment; **Delete** discards it. Nothing is saved until you save.
   - The comment stays editable metadata.
+- **Record:** records the app area until you stop it.
+  - The toolbar is replaced by a 64px recording bar. A red **REC** pill with elapsed time sits in the band; hovering or focusing it reveals **Stop**.
+  - Each frame is captured full-viewport and FFmpeg crops the band, so the recording bar never appears in the cuts. The band is reserved chrome, never app pixels.
+  - Frames are sampled every 150ms. Each click captures a forced frame after a 150ms settle, and periodic sampling pauses while it settles.
+  - Stopping flushes pending frames and closes CDP, then runs FFmpeg in a blocking state before the comment dialog shows the cuts in a shadcn carousel, with a thumbnail for every captured image.
+  - Needs FFmpeg 4 or newer on `PATH` (or `PNT_FFMPEG` pointing at the binary). Availability is checked before recording starts.
 - **Session summary:** open the summary sheet on demand to review all saved selections and recording diagnostics before submitting.
   - Each selection shows its screenshot, comment, and annotation, with **Edit** and **Delete** actions. Edit the comment directly; replace or recreate a selection to change its rectangle or strokes.
+  - Recording entries show their cuts; their comments stay editable but saved recordings cannot be retaken or re-cut.
   - Captures taken on a different URL are marked **Can't check context** in the selection list. Scrolling or switching viewports does not invalidate a saved screenshot.
   - Automatically redact recognized credentials, including cookies and authorization headers. A **Redact credentials** toggle is on by default.
   - Request and response bodies are not scanned for credentials; credentials in bodies may remain visible.
@@ -54,6 +62,11 @@ Submissions contain metadata and file paths, not inline image bytes. No manifest
 - **Per selection:** `selectionId`, `comment`, `coordinates`, `viewport`, `scroll`, `page` (including URL), `createdAt`, and `imagePath`.
   - Coordinates are viewport CSS pixels in TL, TR, BR, BL order.
   - The screenshot is the source of truth; later page changes do not alter it.
+- **Per recording:** `recordingId`, `comment`, `startedAt`, `endedAt`, `durationMs`, `viewport`, `page`, and an ordered `cuts` list.
+  - `viewport` is the recorded app area: the selected viewport minus the 64px Point and Tell band.
+  - Each cut has `cutId`, `number`, `timestamp`, `imagePath`, `diffScore`, and `tags` (`first`, `click`, `last`). `diffScore` is the fraction of pixels changed from the previous kept cut; the first cut scores `0`.
+  - The first and last frame are always cuts. Every click captures its own frame as a cut, even without a pixel change; every other cut must differ from the previous kept cut by more than 10%.
+  - Cut images are JPEG files inside `<artifactsDir>/rec-<recordingId>/`. No source video is kept, and image bytes are never inlined.
 - **Session context:** session ref, console errors/warnings, timestamped app XHR/fetch requests/responses, ARIA accessibility snapshot, origin `localStorage`/`sessionStorage`, cookies, IndexedDB database names, and session diagnostics.
   - Static assets and bundles are excluded.
   - Recognized credential values are redacted by default, except within request and response bodies, which are not scanned.
@@ -63,8 +76,9 @@ Agents can read images from `imagePath` and request a follow-up capture through 
 ## Session and storage
 
 - **Session ref:** the agent must provide the harness name and chat title. A session ID is optional; Point and Tell generates one if omitted. The resulting filesystem-safe ref (e.g. `kilo__checkout-bug__abc123`) scopes API access, artifacts, and operations.
-- **Artifacts:** one session directory holding the WebP screenshots plus `console.json`, `network.json`, and `localstorage.json` with the full console, network, and localStorage payloads; request/response bodies included. Payloads reference local paths.
-- **CLI output:** prints the session ref, app URL, overlay URL, and artifact directory. Set `PNT_MACHINE=1` for JSON lines an agent can parse. On submit it prints a session header, then one section per selection with its comment, image path, page, and viewport, then the full manifest as the final JSON line; the session then closes.
+- **Root:** `~/.point-n-tell-ui/` holds `chromium-profile/` (one shared browser profile) and `artifacts/` (one directory per session). Override the root with `PNT_HOME`, or the individual locations with `PNT_PROFILE_DIR` and `PNT_ARTIFACTS_DIR`.
+- **Artifacts:** one session directory holding the WebP screenshots, one directory per recording with its cut JPEGs, plus `console.json`, `network.json`, and `localstorage.json` with the full console, network, and localStorage payloads; request/response bodies included. Payloads reference local paths. Selections use WebP because Chromium encodes it natively; cuts stay JPEG because FFmpeg builds are not guaranteed to include a WebP encoder.
+- **CLI output:** prints the session ref, app URL, overlay URL, and artifact directory. Set `PNT_MACHINE=1` for JSON lines an agent can parse. On submit it prints a session header, then one section per image or recording with its `type`, `comment`, image path, page, and viewport, then the full manifest as the final JSON line; the session then closes.
 - **Session API:** the CLI starts an ephemeral `127.0.0.1` API, launches or attaches Chrome, and injects overlay configuration. The overlay uses the API for selection state and rehydration; it cannot access disk.
 - **Open session:** persists through refresh and navigation until submit, discard, CLI exit, or browser disconnect.
 - **Concurrency:** multiple sessions are supported; operations target an explicit session ref.
@@ -88,20 +102,15 @@ The submit manifest includes the session ref, machine/session metadata, selectio
 
 The user selects the capture viewport in the Point and Tell toolbar, not through CLI arguments. They can switch freely between desktop, tablet, and mobile presets while a session is open. The toolbar is pinned in a 64px band at the top of the window, and the page is offset below it so the overlay never covers app content or blocks annotation. The Chrome window is resized to fit the preset and the page is emulated inside it at that exact size. If the display is shorter than the preset plus browser chrome, the viewport is reduced to what fits, because a viewport taller than the window looks complete to the page and never scrolls; each saved selection records the size actually applied, so selections in one session may differ.
 
-## Sampled interaction capture
+## Video capture
 
-Record sampled frames during normal app use; full video is not sent.
+Record real app use, keep the cuts, and never keep the video.
 
-- **Recording:** one recording-level comment; no per-frame comments.
-- **Sampling:** pixel-diff threshold defaults to **1%**; minimum **500 ms** between frames; heartbeat at most **500 ms**.
-  - Pixel changes and diagnostic events can request a frame.
-  - Requests inside the minimum interval are coalesced, so bursts of events do not each create a screenshot.
-- **Diagnostics:** timestamp console errors/warnings and app-relevant network events during recording. Use events, pixel changes, and activity peaks to identify and annotate useful frames.
-- **Timeline:** playback marks diagnostic events and captured frames; preview cuts/frames to tune sensitivity and review submission.
-- **Recording feedback:** show elapsed time, frame count, and estimated artifact size.
-- **Payload:** recording time range, comment, sampling settings, timestamped diagnostics, and frame index are attached to the same session. Frame images are not inlined.
-- **Frame index:** each entry includes `frameId`/number, `timestamp`, `imagePath`, `diffScore`, and tags such as `first`, `last`, `peak`, `console-event`, or `network-event`. Agents fetch only relevant frames.
-- **Tooling:** use `ffmpeg` only when needed for diff or preview workflows, not static image compression.
+- **Recording:** samples the app every 150ms at the selected size, at desktop, tablet, and mobile. The page stays interactive. Point and Tell lives in a reserved 64px top band that FFmpeg crops from every frame, so the recording bar never appears in the capture. The band is chrome, not app pixels, so scrolled app content is never cut: frames are the app area below the band at every scroll position. One comment per recording.
+- **Cuts:** the first and last frame are always kept. Every click is kept after a 150ms settle; other frames are kept only when they differ from the previous kept cut by more than **10%**. Periodic sampling pauses while a click settles. Stopping flushes pending frames and closes CDP before the blocking FFmpeg step, so the processing state cannot enter a cut. Cuts are ordered by timestamp.
+- **Temp data:** captured frames live in a scratch directory that is deleted when FFmpeg exits, on success or failure. Nothing is saved until you save the capture.
+- **Review:** the capture dialog shows one cut at a time in a shadcn carousel with previous/next, the cut's relative time and tags; saved recordings appear in the session summary with a `cuts` badge, the same carousel, and an editable comment.
+- **Failure:** missing or unsupported FFmpeg is reported before recording; a failed run shows the FFmpeg error, removes partial frames and cuts, and saves nothing. The session stays usable.
 
 ## Implementation notes (draft)
 
@@ -114,4 +123,4 @@ Record sampled frames during normal app use; full video is not sent.
 
 - Default WebP quality for text/marker fidelity versus disk use.
 - Frame-index detail needed for useful, low-cost agent selection.
-- Validate the 1% diff threshold, 500 ms minimum interval, and safeguards for active screens.
+- Validate the 10% diff threshold, 150ms cadence, and click settle with real interaction.

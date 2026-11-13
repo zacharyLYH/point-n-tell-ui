@@ -1,17 +1,20 @@
 #!/usr/bin/env node
 import { mkdir, readFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
-import { arch, homedir, hostname, platform } from 'node:os';
+import { arch, hostname, platform } from 'node:os';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import {
   artifactsRoot,
   cleanupExpiredArtifacts,
   deleteSessionArtifacts,
+  profileRoot,
   shellQuote,
   writeContextArtifacts,
 } from './artifacts.js';
-import { closeApp, launchApp, saveAnnotatedScreenshot } from './browser.js';
+import { closeApp, launchApp, saveAnnotatedScreenshot, startCapture } from './browser.js';
+import { checkFfmpeg, generateCuts } from './recording.js';
+import { RecordingController, cutsDir } from './recording-controller.js';
 import { startServer } from './server.js';
 import { createSessionContext } from './session.js';
 import {
@@ -22,6 +25,8 @@ import {
   type SubmissionResult,
 } from './types.js';
 import { HELP, formatReady, formatSubmit } from './cli-output.js';
+
+type PendingSelection = { selection: Selection; replaced?: Selection };
 
 async function main(): Promise<void> {
   const { values, positionals } = parseArgs({
@@ -55,8 +60,7 @@ async function main(): Promise<void> {
     chatTitle: values['chat-title'],
     sessionId: values['session-id'],
   });
-  const profileDir =
-    process.env.PNT_PROFILE_DIR ?? join(homedir(), '.point-n-tell', 'chromium-profile');
+  const profileDir = profileRoot();
   const root = artifactsRoot();
   const artifactsDir = join(root, session.sessionRef);
   const overlayScript = await readFile(new URL('./overlay.js', import.meta.url), 'utf8');
@@ -65,15 +69,18 @@ async function main(): Promise<void> {
     session,
     viewport: { preset: 'desktop', ...PRESETS.desktop },
     selections: [],
+    recordings: [],
+    recording: { phase: 'idle' },
   };
+  let pending: PendingSelection | undefined;
   let launched: Awaited<ReturnType<typeof launchApp>> | undefined;
   let reviewContext: ReviewContext | undefined;
-  let submitted = false;
-  let finalized = false;
+  let outcome: 'submitted' | 'discarded' | undefined;
   let endSession = () => {};
   const ended = new Promise<void>((resolve) => {
-    endSession = resolve;
+    endSession = () => resolve();
   });
+
   const machineLog = (value: unknown) => {
     if (process.env.PNT_MACHINE === '1') {
       console.log(JSON.stringify(value));
@@ -81,7 +88,7 @@ async function main(): Promise<void> {
   };
 
   const ensureOpen = () => {
-    if (finalized) throw new Error('Session is already submitted or discarded');
+    if (outcome) throw new Error('Session is already submitted or discarded');
   };
 
   const app = () => {
@@ -96,19 +103,47 @@ async function main(): Promise<void> {
       scroll: { x: scrollX, y: scrollY },
     }));
 
+  const discardPending = async () => {
+    if (!pending) return;
+    await deleteSessionArtifacts(pending.selection.imagePath);
+    pending = undefined;
+  };
+
+  const recording = new RecordingController({
+    state,
+    artifactsDir,
+    viewport: () => state.viewport,
+    pageUrl: async () => (await pageContext()).url,
+    openCapture: async (framesDir) => {
+      await checkFfmpeg();
+      const { page, subscribeClicks } = app();
+      return startCapture(page, framesDir, subscribeClicks);
+    },
+    process: generateCuts,
+  });
+
   const api = await startServer({
     getState: () => state,
+    imagePath: (id) => {
+      const selection = [...state.selections, ...(pending ? [pending.selection] : [])].find(
+        (item) => item.selectionId === id,
+      );
+      if (selection) return selection.imagePath;
+      const draft = state.recording.phase === 'draft' ? state.recording.recording : undefined;
+      const recordings = draft ? [...state.recordings, draft] : state.recordings;
+      return recordings.flatMap((item) => item.cuts).find((cut) => cut.cutId === id)?.imagePath;
+    },
     applyViewport: async (viewport) => {
-      ensureOpen();
       // Keep the preset label, record the size the window could actually show.
       state.viewport = { preset: viewport.preset, ...(await app().setViewport(viewport)) };
     },
-    saveSelection: async ({ comment, coordinates }, replaceId) => {
-      ensureOpen();
-      const { page } = app();
-      if (replaceId && !state.selections.some((item) => item.selectionId === replaceId)) {
+    captureSelection: async ({ coordinates, replaceId }) => {
+      if (pending) throw new Error('Finish or delete the current capture first');
+      const replaced = state.selections.find((item) => item.selectionId === replaceId);
+      if (replaceId && !replaced) {
         throw new Error('Selection not found');
       }
+      const { page } = app();
       await mkdir(artifactsDir, { recursive: true });
       const selectionId = randomUUID();
       const imagePath = join(artifactsDir, `${selectionId}.webp`);
@@ -122,7 +157,7 @@ async function main(): Promise<void> {
       const { url: pageUrl, scroll } = await pageContext();
       const selection: Selection = {
         selectionId,
-        comment,
+        comment: replaced?.comment ?? '',
         coordinates,
         viewport: { ...state.viewport },
         scroll,
@@ -130,17 +165,20 @@ async function main(): Promise<void> {
         createdAt: new Date().toISOString(),
         imagePath,
       };
-      const replaced = replaceId
-        ? state.selections.find((item) => item.selectionId === replaceId)
-        : undefined;
-      state.selections = replaceId
-        ? state.selections.map((item) => (item.selectionId === replaceId ? selection : item))
-        : [...state.selections, selection];
-      if (replaced) await deleteSessionArtifacts(replaced.imagePath);
-      return state;
+      pending = { selection, replaced };
+      return { state, draft: { kind: 'selection', selection } };
     },
-    updateComment: async (selectionId, comment) => {
-      ensureOpen();
+    updateSelectionComment: async (selectionId, comment) => {
+      if (pending?.selection.selectionId === selectionId) {
+        const { selection, replaced } = pending;
+        const saved = { ...selection, comment };
+        state.selections = replaced
+          ? state.selections.map((item) => (item.selectionId === replaced.selectionId ? saved : item))
+          : [...state.selections, saved];
+        if (replaced) await deleteSessionArtifacts(replaced.imagePath);
+        pending = undefined;
+        return state;
+      }
       const selection = state.selections.find((item) => item.selectionId === selectionId);
       if (!selection) {
         throw new Error('Selection not found');
@@ -149,18 +187,43 @@ async function main(): Promise<void> {
       return state;
     },
     deleteSelection: async (selectionId) => {
-      ensureOpen();
+      if (pending?.selection.selectionId === selectionId) {
+        await discardPending();
+        return state;
+      }
       const selection = state.selections.find((item) => item.selectionId === selectionId);
       if (selection) await deleteSessionArtifacts(selection.imagePath);
       state.selections = state.selections.filter((item) => item.selectionId !== selectionId);
       return state;
     },
+    startRecording: async () => {
+      await discardPending();
+      return recording.start();
+    },
+    stopRecording: () => recording.stop(),
+    processRecording: () => recording.process(),
+    saveRecordingDraft: (comment) => recording.save(comment),
+    deleteRecordingDraft: () => recording.delete(),
+    updateRecordingComment: async (recordingId, comment) => {
+      const item = state.recordings.find((item) => item.recordingId === recordingId);
+      if (!item) throw new Error('Recording not found');
+      item.comment = comment;
+      return state;
+    },
+    deleteRecording: async (recordingId) => {
+      if (!state.recordings.some((item) => item.recordingId === recordingId)) {
+        throw new Error('Recording not found');
+      }
+      await deleteSessionArtifacts(cutsDir(artifactsDir, recordingId));
+      state.recordings = state.recordings.filter((item) => item.recordingId !== recordingId);
+      return state;
+    },
     openReview: async () => {
-      ensureOpen();
-      const context = await pageContext();
       // Capture the accessibility tree before the review dialog hides the app.
-      const accessibility = await app().page.ariaSnapshot().catch(() => undefined);
-      reviewContext = { ...context, accessibility };
+      reviewContext = {
+        ...(await pageContext()),
+        accessibility: await app().page.ariaSnapshot().catch(() => undefined),
+      };
       await app().expandForReview();
       return { state, context: reviewContext };
     },
@@ -173,9 +236,10 @@ async function main(): Promise<void> {
       return state;
     },
     submit: async ({ redactCredentials }) => {
-      ensureOpen();
-      if (state.selections.length === 0) {
-        throw new Error('Add at least one selection before submitting');
+      await recording.dispose();
+      await discardPending();
+      if (state.selections.length === 0 && state.recordings.length === 0) {
+        throw new Error('Add at least one capture before submitting');
       }
 
       const context = await app().captureContext({
@@ -185,6 +249,7 @@ async function main(): Promise<void> {
       });
       const contextArtifacts = await writeContextArtifacts(artifactsDir, context);
       const selections = structuredClone(state.selections);
+      const recordings = structuredClone(state.recordings);
       const manifest: SubmissionResult = {
         session,
         machine: {
@@ -197,9 +262,12 @@ async function main(): Promise<void> {
         appUrl: url.href,
         selectionIds: selections.map((selection) => selection.selectionId),
         selectionCount: selections.length,
-        imagePaths: selections.map((selection) => selection.imagePath),
-        frameIndex: [],
+        imagePaths: [
+          ...selections.map((selection) => selection.imagePath),
+          ...recordings.flatMap((recording) => recording.cuts.map((cut) => cut.imagePath)),
+        ],
         selections,
+        recordings,
         context,
         artifactsDir,
         contextArtifacts,
@@ -208,20 +276,19 @@ async function main(): Promise<void> {
         },
       };
 
-      submitted = true;
-      finalized = true;
+      outcome = 'submitted';
       console.log(formatSubmit(manifest));
       machineLog(manifest);
       return manifest;
     },
     discard: async () => {
-      ensureOpen();
-      await deleteSessionArtifacts(artifactsDir);
-      finalized = true;
+      await recording.dispose();
+      await discardPending();
+      outcome = 'discarded';
       return { discarded: true };
     },
     endSession,
-  });
+  }, ensureOpen);
 
   try {
     await cleanupExpiredArtifacts(root);
@@ -261,7 +328,8 @@ async function main(): Promise<void> {
     });
     await Promise.race([ended, exit]);
   } finally {
-    if (!submitted) {
+    await recording.dispose().catch(() => undefined);
+    if (outcome !== 'submitted') {
       await deleteSessionArtifacts(artifactsDir).catch(() => undefined);
     }
     await api.close().catch(() => undefined);

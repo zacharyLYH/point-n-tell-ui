@@ -10,14 +10,12 @@ export type AnnotationState = {
   strokes: Point[][];
   redoStrokes: Point[][];
   gesture?: Gesture;
-  comment: string;
   tool: Tool;
 };
 
 export type AnnotationAction =
   | { type: 'reset' }
-  | { type: 'seed'; coordinates: Coordinates; comment: string }
-  | { type: 'comment'; value: string }
+  | { type: 'seed'; coordinates: Coordinates }
   | { type: 'tool'; value: Tool }
   | { type: 'start'; point: Point }
   | { type: 'move'; point: Point }
@@ -29,7 +27,6 @@ export type AnnotationAction =
 const initialState: AnnotationState = {
   strokes: [],
   redoStrokes: [],
-  comment: '',
   tool: 'rectangle',
 };
 
@@ -82,9 +79,7 @@ function reducer(state: AnnotationState, action: AnnotationAction): AnnotationSt
     case 'reset':
       return initialState;
     case 'seed':
-      return { ...initialState, rectangle: toRectangle(action.coordinates), comment: action.comment };
-    case 'comment':
-      return { ...state, comment: action.value };
+      return { ...initialState, rectangle: toRectangle(action.coordinates) };
     case 'tool':
       return { ...state, tool: action.value };
     case 'start':

@@ -4,9 +4,10 @@ import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { SessionState, SubmissionResult } from '../src/types.js';
+import type { CaptureResult, SessionState, SubmissionResult } from '../src/types.js';
 import {
   appPage,
+  captureSelection,
   connect,
   drawSelection,
   expectCenteredWindow,
@@ -86,7 +87,6 @@ test('runs the real CLI headed, persists the profile, and switches viewports', a
     await saveScreenshot(page, 'viewport-mobile.png');
 
     await page.getByRole('button', { name: 'Start annotation' }).click();
-    await page.getByLabel('Selection comment').fill('Button alignment issue');
     const appButtonBox = await page.locator('#app-button').boundingBox();
     expect(appButtonBox).not.toBeNull();
     await page.mouse.click(appButtonBox!.x + appButtonBox!.width / 2, appButtonBox!.y + appButtonBox!.height / 2);
@@ -103,8 +103,8 @@ test('runs the real CLI headed, persists the profile, and switches viewports', a
     await page.getByRole('button', { name: 'Undo' }).click();
     await expect(page.getByRole('button', { name: 'Undo' })).toBeDisabled();
     await page.getByRole('button', { name: 'Redo' }).click();
-    await page.getByRole('button', { name: 'Save selection' }).click();
-    await expect(page.getByRole('status', { name: '1 saved selections' })).toBeVisible();
+    await captureSelection(page, 'Button alignment issue');
+    await expect(page.getByRole('status', { name: '1 saved captures' })).toBeVisible();
     await expect.poll(() => page.evaluate(() => [innerWidth, innerHeight])).toEqual([390, 844]);
 
     const savedState = await (await fetch(`${first.ready.apiUrl}/state`)).json() as SessionState;
@@ -133,7 +133,6 @@ test('runs the real CLI headed, persists the profile, and switches viewports', a
     const firstImageHash = createHash('sha256').update(firstImage).digest('hex');
 
     await page.getByRole('button', { name: 'Start annotation' }).click();
-    await page.getByLabel('Selection comment').fill('Cancel this draft');
     await page.mouse.move(100, 150);
     await page.mouse.down();
     await page.mouse.move(250, 260, { steps: 3 });
@@ -144,20 +143,19 @@ test('runs the real CLI headed, persists the profile, and switches viewports', a
     await page.mouse.move(200, 220, { steps: 2 });
     await page.mouse.up();
     await page.getByRole('button', { name: 'Clear strokes' }).click();
-    await expect(page.getByRole('button', { name: 'Save selection' })).toBeEnabled();
+    await expect(page.getByRole('button', { name: 'Capture selection' })).toBeEnabled();
     await page.getByRole('button', { name: 'Cancel annotation' }).click();
-    await expect(page.getByRole('status', { name: '1 saved selections' })).toBeVisible();
+    await expect(page.getByRole('status', { name: '1 saved captures' })).toBeVisible();
 
     await page.getByRole('button', { name: /Tablet/ }).click();
     await expect.poll(() => page.evaluate(() => [innerWidth, innerHeight])).toEqual([768, 1024]);
     await page.getByRole('button', { name: 'Start annotation' }).click();
-    await page.getByLabel('Selection comment').fill('Second viewport capture');
     await page.mouse.move(100, 150);
     await page.mouse.down();
     await page.mouse.move(300, 280, { steps: 3 });
     await page.mouse.up();
-    await page.getByRole('button', { name: 'Save selection' }).click();
-    await expect(page.getByRole('status', { name: '2 saved selections' })).toBeVisible();
+    await captureSelection(page, 'Second viewport capture');
+    await expect(page.getByRole('status', { name: '2 saved captures' })).toBeVisible();
 
     const secondState = await (await fetch(`${first.ready.apiUrl}/state`)).json() as SessionState;
     expect(secondState.selections).toHaveLength(2);
@@ -170,14 +168,14 @@ test('runs the real CLI headed, persists the profile, and switches viewports', a
 
     await page.reload({ waitUntil: 'domcontentloaded' });
     await expect(page.getByRole('region', { name: 'Point and Tell toolbar' })).toBeVisible();
-    await expect(page.getByRole('status', { name: '2 saved selections' })).toBeVisible();
+    await expect(page.getByRole('status', { name: '2 saved captures' })).toBeVisible();
     await expect
       .poll(() => page.evaluate(() => [innerWidth, innerHeight]))
       .toEqual([768, 1024]);
 
     await page.goto(`${fixture.url}/other`, { waitUntil: 'domcontentloaded' });
     await expect(page.getByRole('region', { name: 'Point and Tell toolbar' })).toBeVisible();
-    await expect(page.getByRole('status', { name: '2 saved selections' })).toBeVisible();
+    await expect(page.getByRole('status', { name: '2 saved captures' })).toBeVisible();
     await expect
       .poll(() => page.evaluate(() => [innerWidth, innerHeight]))
       .toEqual([768, 1024]);
@@ -238,20 +236,10 @@ test('reviews, edits, deletes, and replaces selections', async () => {
 
   const fixture = await startFixture();
   const profileDir = await mkdtemp(join(tmpdir(), 'pnt-review-'));
-  const { children, browsers, cleanup } = trackSession(fixture, profileDir);
+  const { launch, cleanup } = trackSession(fixture, profileDir);
 
   try {
-    const cli = await launchCli({
-      url: fixture.url,
-      profileDir,
-      sessionId: 'review-flow',
-      cdpPort: await freePort(),
-    });
-    children.push(cli.child);
-
-    const browser = await connect(cli.ready.cdpUrl);
-    browsers.push(browser);
-    const page = await appPage(browser, fixture.url);
+    const { cli, page } = await launch({ sessionId: 'review-flow' });
 
     await drawSelection(page, 'Alpha issue', [80, 120], [260, 260]);
     await drawSelection(page, 'Beta issue', [120, 160], [320, 310]);
@@ -293,19 +281,19 @@ test('reviews, edits, deletes, and replaces selections', async () => {
     expect(Math.abs(dialogBox!.x - (browserSize.width - dialogBox!.width) / 2)).toBeLessThan(2);
     await saveScreenshot(page, 'review-workspace.png');
 
-    await expect(page.getByLabel('Selection comment')).toHaveValue('Alpha issue');
+    await expect(page.getByLabel('Capture comment')).toHaveValue('Alpha issue');
 
-    // Up/Down keys walk the selection list, but not while editing a comment.
+    // Up/Down keys walk the capture list, but not while editing a comment.
     await page.getByRole('button', { name: /Selection 1/ }).click();
     await page.keyboard.press('ArrowDown');
-    await expect(page.getByLabel('Selection comment')).toHaveValue('Beta issue');
+    await expect(page.getByLabel('Capture comment')).toHaveValue('Beta issue');
     await page.keyboard.press('ArrowUp');
-    await expect(page.getByLabel('Selection comment')).toHaveValue('Alpha issue');
-    await page.getByLabel('Selection comment').click();
+    await expect(page.getByLabel('Capture comment')).toHaveValue('Alpha issue');
+    await page.getByLabel('Capture comment').click();
     await page.keyboard.press('ArrowDown');
-    await expect(page.getByLabel('Selection comment')).toHaveValue('Alpha issue');
+    await expect(page.getByLabel('Capture comment')).toHaveValue('Alpha issue');
 
-    await page.getByLabel('Selection comment').fill('Alpha issue edited');
+    await page.getByLabel('Capture comment').fill('Alpha issue edited');
     await page.getByRole('button', { name: 'Save comment' }).click();
     await expect(page.getByRole('button', { name: 'Save comment' })).toBeDisabled();
 
@@ -329,13 +317,17 @@ test('reviews, edits, deletes, and replaces selections', async () => {
     await page.getByRole('button', { name: /Gamma issue/ }).click();
     await page.getByRole('button', { name: 'Capture again' }).click();
     await expect(dialog).toHaveCount(0);
-    await expect(page.getByLabel('Selection comment')).toHaveValue('Gamma issue');
+    await expect(page.getByRole('button', { name: 'Capture selection' })).toBeVisible();
     // Replacing returns to the capture's own viewport and scroll position.
     await expect.poll(() => page.evaluate(() => [innerWidth, innerHeight])).toEqual([1440, 900]);
     await expect.poll(() => page.evaluate(() => scrollY)).toBe(0);
 
-    await page.getByLabel('Selection comment').fill('Gamma replaced');
-    await page.getByRole('button', { name: 'Save selection' }).click();
+    await page.getByRole('button', { name: 'Capture selection' }).click();
+    const replacement = page.getByRole('dialog', { name: 'Save screenshot capture' });
+    // The comment of the capture being replaced seeds the new capture.
+    await expect(replacement.getByLabel('Capture comment')).toHaveValue('Gamma issue');
+    await replacement.getByLabel('Capture comment').fill('Gamma replaced');
+    await replacement.getByRole('button', { name: 'Save capture' }).click();
     await expect(page.getByRole('button', { name: 'Start annotation' })).toBeVisible();
 
     state = await sessionState(cli.ready.apiUrl);
@@ -409,13 +401,11 @@ test('saves identical previews of the same element at every viewport', async () 
       const target = box!;
 
       await page.getByRole('button', { name: 'Start annotation' }).click();
-      await page.getByLabel('Selection comment').fill(`${preset.label} target`);
       await page.mouse.move(target.x, target.y);
       await page.mouse.down();
       await page.mouse.move(target.x + target.width, target.y + target.height, { steps: 4 });
       await page.mouse.up();
-      await page.getByRole('button', { name: 'Save selection' }).click();
-      await expect(page.getByRole('button', { name: 'Start annotation' })).toBeVisible();
+      await captureSelection(page, `${preset.label} target`);
     }
 
     const state = await sessionState(cli.ready.apiUrl);
@@ -467,20 +457,10 @@ test('replacing a capture restores its viewport and scroll', async () => {
 
   const fixture = await startFixture(PREVIEW_FIXTURE);
   const profileDir = await mkdtemp(join(tmpdir(), 'pnt-replace-'));
-  const { children, browsers, cleanup } = trackSession(fixture, profileDir);
+  const { launch, cleanup } = trackSession(fixture, profileDir);
 
   try {
-    const cli = await launchCli({
-      url: fixture.url,
-      profileDir,
-      sessionId: 'replace-context',
-      cdpPort: await freePort(),
-    });
-    children.push(cli.child);
-
-    const browser = await connect(cli.ready.cdpUrl);
-    browsers.push(browser);
-    const page = await appPage(browser, fixture.url);
+    const { cli, page } = await launch({ sessionId: 'replace-context' });
 
     await page.getByRole('button', { name: /Tablet viewport/ }).click();
     await expect.poll(() => page.evaluate(() => [innerWidth, innerHeight])).toEqual([768, 1024]);
@@ -491,13 +471,11 @@ test('replacing a capture restores its viewport and scroll', async () => {
     expect(box).not.toBeNull();
     const target = box!;
     await page.getByRole('button', { name: 'Start annotation' }).click();
-    await page.getByLabel('Selection comment').fill('Scrolled target');
     await page.mouse.move(target.x, target.y);
     await page.mouse.down();
     await page.mouse.move(target.x + target.width, target.y + target.height, { steps: 4 });
     await page.mouse.up();
-    await page.getByRole('button', { name: 'Save selection' }).click();
-    await expect(page.getByRole('button', { name: 'Start annotation' })).toBeVisible();
+    await captureSelection(page, 'Scrolled target');
 
     const [original] = (await sessionState(cli.ready.apiUrl)).selections;
     expect(original.viewport).toEqual({ preset: 'tablet', width: 768, height: 1024 });
@@ -518,8 +496,8 @@ test('replacing a capture restores its viewport and scroll', async () => {
     await expect.poll(() => page.evaluate(() => [innerWidth, innerHeight])).toEqual([768, 1024]);
     await expect.poll(() => page.evaluate(() => scrollY)).toBe(120);
 
-    await page.getByRole('button', { name: 'Save selection' }).click();
-    await expect(page.getByRole('button', { name: 'Start annotation' })).toBeVisible();
+    // The prefilled comment is enough to save the replacement.
+    await captureSelection(page);
 
     const state = await sessionState(cli.ready.apiUrl);
     expect(state.selections).toHaveLength(1);
@@ -574,11 +552,10 @@ test('replacing a capture accepts the clamped viewport it recorded', async () =>
     await expect(dialog).toBeVisible();
     await page.getByRole('button', { name: 'Capture again' }).click();
     await expect(dialog).toHaveCount(0);
-    await expect(page.getByRole('button', { name: 'Save selection' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Capture selection' })).toBeVisible();
     await expect(page.getByText('desktop must be 1440x900')).toHaveCount(0);
 
-    await page.getByRole('button', { name: 'Save selection' }).click();
-    await expect(page.getByRole('button', { name: 'Start annotation' })).toBeVisible();
+    await captureSelection(page);
 
     const state = await sessionState(cli.ready.apiUrl);
     expect(state.selections).toHaveLength(1);
@@ -593,20 +570,10 @@ test('context checks are relative to the capture viewport', async () => {
 
   const fixture = await startFixture();
   const profileDir = await mkdtemp(join(tmpdir(), 'pnt-context-'));
-  const { children, browsers, cleanup } = trackSession(fixture, profileDir);
+  const { launch, cleanup } = trackSession(fixture, profileDir);
 
   try {
-    const cli = await launchCli({
-      url: fixture.url,
-      profileDir,
-      sessionId: 'context-relative',
-      cdpPort: await freePort(),
-    });
-    children.push(cli.child);
-
-    const browser = await connect(cli.ready.cdpUrl);
-    browsers.push(browser);
-    const page = await appPage(browser, fixture.url);
+    const { page } = await launch({ sessionId: 'context-relative' });
 
     await drawSelection(page, 'Desktop capture', [80, 120], [260, 260]);
     await page.getByRole('button', { name: /Mobile viewport/ }).click();
@@ -652,20 +619,10 @@ test('submits included selections with context and keeps artifacts', async () =>
 
   const fixture = await startFixture(CONTEXT_FIXTURE);
   const profileDir = await mkdtemp(join(tmpdir(), 'pnt-submit-'));
-  const { children, browsers, cleanup } = trackSession(fixture, profileDir);
+  const { launch, cleanup } = trackSession(fixture, profileDir);
 
   try {
-    const cli = await launchCli({
-      url: fixture.url,
-      profileDir,
-      sessionId: 'submit-flow',
-      cdpPort: await freePort(),
-    });
-    children.push(cli.child);
-
-    const browser = await connect(cli.ready.cdpUrl);
-    browsers.push(browser);
-    const page = await appPage(browser, fixture.url);
+    const { cli, page } = await launch({ sessionId: 'submit-flow' });
     await page.waitForLoadState('networkidle');
 
     await drawSelection(page, 'Alpha context', [80, 120], [260, 260]);
@@ -683,11 +640,14 @@ test('submits included selections with context and keeps artifacts', async () =>
 
     const redactSwitch = page.getByRole('switch', { name: 'Redact credentials' });
     await expect(redactSwitch).toHaveAttribute('aria-checked', 'true');
-    const submitResponse = page.waitForResponse((response) => response.url().endsWith('/submit'));
+    // Submitting closes the session as soon as the response is flushed, so the
+    // page can go away before the response is observed.
+    const submitResponse = page
+      .waitForResponse((response) => response.url().endsWith('/submit'))
+      .catch(() => undefined);
     await page.getByRole('button', { name: 'Submit' }).click();
-    const response = await submitResponse;
-    expect(response.ok()).toBe(true);
     await waitForExit(cli.child);
+    expect((await submitResponse)?.ok() ?? true).toBe(true);
     const result = JSON.parse(
       cli.output().split('\n').filter((line) => line.startsWith('{')).at(-1)!,
     ) as SubmissionResult;
@@ -700,7 +660,6 @@ test('submits included selections with context and keeps artifacts', async () =>
       'Gamma context',
     ]);
     expect(result.imagePaths).toEqual(result.selections.map((selection) => selection.imagePath));
-    expect(result.frameIndex).toEqual([]);
     expect(result.machine.hostname).toBeTruthy();
     expect(result.artifactsDir).toBe(join(profileDir, 'artifacts', cli.ready.sessionRef));
     expect(result.retrieval.artifacts).toContain(result.artifactsDir);
@@ -781,30 +740,22 @@ test('redaction toggle off submits raw context values', async () => {
 
   const fixture = await startFixture(CONTEXT_FIXTURE);
   const profileDir = await mkdtemp(join(tmpdir(), 'pnt-submit-raw-'));
-  const { children, browsers, cleanup } = trackSession(fixture, profileDir);
+  const { launch, cleanup } = trackSession(fixture, profileDir);
 
   try {
-    const cli = await launchCli({
-      url: fixture.url,
-      profileDir,
-      sessionId: 'submit-raw',
-      cdpPort: await freePort(),
-    });
-    children.push(cli.child);
-
-    const browser = await connect(cli.ready.cdpUrl);
-    browsers.push(browser);
-    const page = await appPage(browser, fixture.url);
+    const { cli, page } = await launch({ sessionId: 'submit-raw' });
     await page.waitForLoadState('networkidle');
     await drawSelection(page, 'Raw context', [80, 120], [260, 260]);
 
     await page.getByRole('button', { name: 'Open session summary' }).click();
     await expect(page.getByRole('dialog', { name: 'Session summary' })).toBeVisible();
     await page.getByRole('switch', { name: 'Redact credentials' }).click();
-    const submitResponse = page.waitForResponse((response) => response.url().endsWith('/submit'));
+    const submitResponse = page
+      .waitForResponse((response) => response.url().endsWith('/submit'))
+      .catch(() => undefined);
     await page.getByRole('button', { name: 'Submit' }).click();
-    expect((await submitResponse).ok()).toBe(true);
     await waitForExit(cli.child);
+    expect((await submitResponse)?.ok() ?? true).toBe(true);
     const result = JSON.parse(
       cli.output().split('\n').filter((line) => line.startsWith('{')).at(-1)!,
     ) as SubmissionResult;
@@ -834,20 +785,10 @@ test('discards a session and deletes its artifacts', async () => {
 
   const fixture = await startFixture();
   const profileDir = await mkdtemp(join(tmpdir(), 'pnt-discard-'));
-  const { children, browsers, cleanup } = trackSession(fixture, profileDir);
+  const { launch, cleanup } = trackSession(fixture, profileDir);
 
   try {
-    const cli = await launchCli({
-      url: fixture.url,
-      profileDir,
-      sessionId: 'discard-flow',
-      cdpPort: await freePort(),
-    });
-    children.push(cli.child);
-
-    const browser = await connect(cli.ready.cdpUrl);
-    browsers.push(browser);
-    const page = await appPage(browser, fixture.url);
+    const { cli, page } = await launch({ sessionId: 'discard-flow' });
     await drawSelection(page, 'Discard this', [80, 120], [260, 260]);
 
     const artifactsDir = join(profileDir, 'artifacts', cli.ready.sessionRef);
@@ -870,20 +811,10 @@ test('browser disconnect deletes unsubmitted artifacts', async () => {
 
   const fixture = await startFixture();
   const profileDir = await mkdtemp(join(tmpdir(), 'pnt-disconnect-'));
-  const { children, browsers, cleanup } = trackSession(fixture, profileDir);
+  const { launch, cleanup } = trackSession(fixture, profileDir);
 
   try {
-    const cli = await launchCli({
-      url: fixture.url,
-      profileDir,
-      sessionId: 'disconnect-flow',
-      cdpPort: await freePort(),
-    });
-    children.push(cli.child);
-
-    const browser = await connect(cli.ready.cdpUrl);
-    browsers.push(browser);
-    const page = await appPage(browser, fixture.url);
+    const { cli, page } = await launch({ sessionId: 'disconnect-flow' });
     await drawSelection(page, 'Disconnect this', [80, 120], [260, 260]);
 
     const artifactsDir = join(profileDir, 'artifacts', cli.ready.sessionRef);
@@ -902,20 +833,10 @@ test('CLI cancellation deletes unsubmitted artifacts', async () => {
 
   const fixture = await startFixture();
   const profileDir = await mkdtemp(join(tmpdir(), 'pnt-cancel-'));
-  const { children, browsers, cleanup } = trackSession(fixture, profileDir);
+  const { launch, cleanup } = trackSession(fixture, profileDir);
 
   try {
-    const cli = await launchCli({
-      url: fixture.url,
-      profileDir,
-      sessionId: 'cancel-flow',
-      cdpPort: await freePort(),
-    });
-    children.push(cli.child);
-
-    const browser = await connect(cli.ready.cdpUrl);
-    browsers.push(browser);
-    const page = await appPage(browser, fixture.url);
+    const { cli, page } = await launch({ sessionId: 'cancel-flow' });
     await drawSelection(page, 'Cancel this', [80, 120], [260, 260]);
 
     const artifactsDir = join(profileDir, 'artifacts', cli.ready.sessionRef);
@@ -992,20 +913,10 @@ test('restores bottom-of-page captures across presets', async () => {
 
   const fixture = await startFixture(SCROLL_FIXTURE);
   const profileDir = await mkdtemp(join(tmpdir(), 'pnt-bottom-'));
-  const { children, browsers, cleanup } = trackSession(fixture, profileDir);
+  const { launch, cleanup } = trackSession(fixture, profileDir);
 
   try {
-    const cli = await launchCli({
-      url: fixture.url,
-      profileDir,
-      sessionId: 'bottom-edge',
-      cdpPort: await freePort(),
-    });
-    children.push(cli.child);
-
-    const browser = await connect(cli.ready.cdpUrl);
-    browsers.push(browser);
-    const page = await appPage(browser, fixture.url);
+    const { cli, page } = await launch({ sessionId: 'bottom-edge' });
 
     await page.getByRole('button', { name: /Mobile viewport/ }).click();
     await expect.poll(() => page.evaluate(() => [innerWidth, innerHeight])).toEqual([390, 844]);
@@ -1019,10 +930,12 @@ test('restores bottom-of-page captures across presets', async () => {
     expect(box!.y).toBeGreaterThanOrEqual(0);
     expect(box!.y + box!.height).toBeLessThanOrEqual(844);
 
+    // The target's top edge sits under the toolbar band at this scroll offset,
+    // so the drag starts below it; the rectangle still covers the target.
     await drawSelection(
       page,
       'Bottom target at mobile',
-      [box!.x, box!.y],
+      [box!.x, Math.max(box!.y, 70)],
       [box!.x + box!.width, box!.y + box!.height],
     );
 
@@ -1047,10 +960,9 @@ test('restores bottom-of-page captures across presets', async () => {
     await expect(dialog).toHaveCount(0);
     await expect.poll(() => page.evaluate(() => [innerWidth, innerHeight])).toEqual([390, 844]);
     await expect.poll(() => page.evaluate(() => scrollY)).toBe(bottom);
-    await expect(page.getByRole('button', { name: 'Save selection' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Capture selection' })).toBeVisible();
 
-    await page.getByRole('button', { name: 'Save selection' }).click();
-    await expect(page.getByRole('button', { name: 'Start annotation' })).toBeVisible();
+    await captureSelection(page);
 
     const state = await sessionState(cli.ready.apiUrl);
     expect(state.selections).toHaveLength(1);
@@ -1071,20 +983,10 @@ test('blocks empty submits and rejects malformed session input', async () => {
 
   const fixture = await startFixture();
   const profileDir = await mkdtemp(join(tmpdir(), 'pnt-empty-'));
-  const { children, browsers, cleanup } = trackSession(fixture, profileDir);
+  const { launch, cleanup } = trackSession(fixture, profileDir);
 
   try {
-    const cli = await launchCli({
-      url: fixture.url,
-      profileDir,
-      sessionId: 'empty-edge',
-      cdpPort: await freePort(),
-    });
-    children.push(cli.child);
-
-    const browser = await connect(cli.ready.cdpUrl);
-    browsers.push(browser);
-    const page = await appPage(browser, fixture.url);
+    const { cli, page } = await launch({ sessionId: 'empty-edge' });
 
     await drawSelection(page, 'Only selection', [80, 120], [260, 260]);
     const [saved] = (await sessionState(cli.ready.apiUrl)).selections;
@@ -1093,9 +995,9 @@ test('blocks empty submits and rejects malformed session input', async () => {
     const dialog = page.getByRole('dialog', { name: 'Session summary' });
     await expect(dialog).toBeVisible();
     await page.getByRole('button', { name: 'Delete selection' }).click();
-    await expect(dialog.getByText('No selections remain.')).toBeVisible();
+    await expect(dialog.getByText('No captures remain.')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Submit' })).toBeDisabled();
-    await expect(page.getByText('No selection selected.')).toBeVisible();
+    await expect(page.getByText('No capture selected.')).toBeVisible();
     await saveScreenshot(page, 'empty-review-edge.png');
 
     const api = cli.ready.apiUrl;
@@ -1113,20 +1015,37 @@ test('blocks empty submits and rejects malformed session input', async () => {
     ];
 
     expect((await post('/viewport', { preset: 'watch', width: 100, height: 100 })).status).toBe(400);
-    expect((await post('/selection', { comment: '', coordinates: valid })).status).toBe(400);
-    expect(
-      (await post('/selection', { comment: 'x'.repeat(5001), coordinates: valid })).status,
-    ).toBe(400);
     expect(
       (
         await post('/selection', {
-          comment: 'Skewed',
           coordinates: [valid[0], { x: 60, y: 5 }, valid[2], valid[3]],
         })
       ).status,
     ).toBe(400);
     expect((await post('/selection', '{', true)).status).toBe(400);
-    expect((await fetch(`${api}/selection/unknown/image`)).status).toBe(400);
+    expect((await fetch(`${api}/image/unknown`)).status).toBe(400);
+
+    // A capture is a draft until it is saved with a valid comment.
+    const captured = await post('/selection', { coordinates: valid });
+    expect(captured.status).toBe(200);
+    const { draft } = (await captured.json()) as CaptureResult;
+    expect(draft.kind).toBe('selection');
+    const draftId = draft.kind === 'selection' ? draft.selection.selectionId : '';
+    const draftImage = draft.kind === 'selection' ? draft.selection.imagePath : '';
+    expect((await fetch(`${api}/state`).then((r) => r.json()) as SessionState).selections).toHaveLength(0);
+    expect((await fetch(`${api}/image/${draftId}`)).status).toBe(200);
+    expect(
+      (
+        await fetch(`${api}/selection/${draftId}`, {
+          method: 'PATCH',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ comment: ' ' }),
+        })
+      ).status,
+    ).toBe(400);
+    expect((await fetch(`${api}/selection/${draftId}`, { method: 'DELETE' })).status).toBe(200);
+    expect(await pathExists(draftImage)).toBe(false);
+
     expect(
       (
         await fetch(`${api}/selection/unknown`, {
@@ -1138,7 +1057,7 @@ test('blocks empty submits and rejects malformed session input', async () => {
     ).toBe(400);
     const emptySubmit = await post('/submit', {});
     expect(emptySubmit.status).toBe(400);
-    expect(((await emptySubmit.json()) as { error: string }).error).toMatch(/at least one selection/);
+    expect(((await emptySubmit.json()) as { error: string }).error).toMatch(/at least one capture/);
     expect((await fetch(`${api}/state`)).ok).toBe(true);
     expect(await pathExists(saved.imagePath)).toBe(false);
 
@@ -1160,20 +1079,10 @@ test('redacts credential variants in storage, URLs, and headers', async () => {
 
   const fixture = await startFixture(SECRETS_FIXTURE);
   const profileDir = await mkdtemp(join(tmpdir(), 'pnt-secrets-'));
-  const { children, browsers, cleanup } = trackSession(fixture, profileDir);
+  const { launch, cleanup } = trackSession(fixture, profileDir);
 
   try {
-    const cli = await launchCli({
-      url: fixture.url,
-      profileDir,
-      sessionId: 'secrets-edge',
-      cdpPort: await freePort(),
-    });
-    children.push(cli.child);
-
-    const browser = await connect(cli.ready.cdpUrl);
-    browsers.push(browser);
-    const page = await appPage(browser, fixture.url);
+    const { cli, page } = await launch({ sessionId: 'secrets-edge' });
     await page.waitForLoadState('networkidle');
 
     await drawSelection(page, 'First page capture', [80, 120], [260, 260]);
@@ -1189,10 +1098,12 @@ test('redacts credential variants in storage, URLs, and headers', async () => {
     await expect(list.getByText("Can't check context")).toHaveCount(1);
     await saveScreenshot(page, 'redaction-edge.png');
 
-    const submitResponse = page.waitForResponse((response) => response.url().endsWith('/submit'));
+    const submitResponse = page
+      .waitForResponse((response) => response.url().endsWith('/submit'))
+      .catch(() => undefined);
     await page.getByRole('button', { name: 'Submit' }).click();
-    expect((await submitResponse).ok()).toBe(true);
     await waitForExit(cli.child);
+    expect((await submitResponse)?.ok() ?? true).toBe(true);
     const result = JSON.parse(
       cli.output().split('\n').filter((line) => line.startsWith('{')).at(-1)!,
     ) as SubmissionResult;

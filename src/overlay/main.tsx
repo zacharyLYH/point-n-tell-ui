@@ -17,7 +17,8 @@ if (window.top === window && !window.__PNT_OVERLAY__) {
 
   const mount = () => {
     // The toolbar owns the top band; the page is pushed below it so the app is
-    // never covered and every pixel stays visible and annotatable.
+    // never covered and every pixel stays visible and annotatable. Recording
+    // swaps the toolbar for a recording bar in the same band.
     const safeArea = document.createElement('style');
     safeArea.id = 'pnt-toolbar-safe-area';
     safeArea.textContent = 'body { padding-top: 64px !important; }';

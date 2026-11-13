@@ -1,8 +1,17 @@
-import { expect, type Page } from '@playwright/test';
+import { expect, type Locator, type Page } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 
-export async function saveScreenshot(page: Page, name: string): Promise<void> {
-  await expect(page).toHaveScreenshot(name);
+/**
+ * Captures a baseline image. Mask locators cover values that change per run;
+ * `maxDiffPixels` absorbs the few pixels by which a mask box can shift when
+ * the masked value changes length.
+ */
+export async function saveScreenshot(
+  page: Page,
+  name: string,
+  options: { mask?: Locator[]; maxDiffPixels?: number } = {},
+): Promise<void> {
+  await expect(page).toHaveScreenshot(name, options);
 }
 
 export async function retainScreenshot(source: string, name: string): Promise<void> {
