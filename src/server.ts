@@ -22,8 +22,6 @@ type SessionApi = {
   startRecording: () => Promise<SessionState>;
   stopRecording: () => Promise<SessionState>;
   processRecording: () => Promise<CaptureResult>;
-  saveRecordingDraft: (comment: string) => Promise<SessionState>;
-  deleteRecordingDraft: () => Promise<SessionState>;
   updateRecordingComment: (recordingId: string, comment: string) => Promise<SessionState>;
   deleteRecording: (recordingId: string) => Promise<SessionState>;
   openReview: () => Promise<{ state: SessionState; context: ReviewContext }>;
@@ -133,10 +131,6 @@ export async function startServer(
           return send(res, 200, await api.stopRecording());
         case 'POST /recording/process':
           return send(res, 200, await api.processRecording());
-        case 'POST /recording/save':
-          return send(res, 200, await api.saveRecordingDraft(parseComment(body.comment)));
-        case 'DELETE /recording/draft':
-          return send(res, 200, await api.deleteRecordingDraft());
         case 'POST /review/open':
           return send(res, 200, await api.openReview());
         case 'POST /review/close':

@@ -163,6 +163,8 @@ export type ContextArtifacts = {
   console: string;
   network: string;
   localStorage: string;
+  /** The ARIA snapshot is YAML, so it is stored as-is instead of wrapped in JSON. */
+  accessibility: string;
 };
 
 export type SubmissionResult = {

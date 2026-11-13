@@ -7,10 +7,13 @@ function pathFor(points: Point[]): string {
 
 export function AnnotationCanvas({
   annotation,
-  selectionNumber,
+  selectionNumber = 0,
+  interactive = true,
 }: {
   annotation: Annotation;
-  selectionNumber: number;
+  selectionNumber?: number;
+  /** Recording keeps the canvas mounted but lets clicks reach the page. */
+  interactive?: boolean;
 }) {
   const { state, onPointerDown, onPointerMove, onPointerUp } = annotation;
   const rectangle = state.rectangle;
@@ -21,7 +24,11 @@ export function AnnotationCanvas({
     <svg
       aria-label="Annotation canvas"
       className="fixed inset-0 h-full w-full"
-      style={{ pointerEvents: 'auto', touchAction: 'none', cursor: state.tool === 'rectangle' ? 'crosshair' : 'cell' }}
+      style={{
+        pointerEvents: interactive ? 'auto' : 'none',
+        touchAction: 'none',
+        cursor: state.tool === 'rectangle' ? 'crosshair' : 'cell',
+      }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
@@ -49,20 +56,20 @@ export function AnnotationCanvas({
               {selectionNumber}
             </text>
           </g>
-          {strokes.map((points, index) => (
-            <path
-              key={index}
-              d={pathFor(points)}
-              fill="none"
-              stroke="#2563eb"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth="3"
-              vectorEffect="non-scaling-stroke"
-            />
-          ))}
         </>
       )}
+      {strokes.map((points, index) => (
+        <path
+          key={index}
+          d={pathFor(points)}
+          fill="none"
+          stroke="#2563eb"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth="3"
+          vectorEffect="non-scaling-stroke"
+        />
+      ))}
     </svg>
   );
 }

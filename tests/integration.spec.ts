@@ -677,6 +677,10 @@ test('submits included selections with context and keeps artifacts', async () =>
     expect(artifactCall?.method).toBe('POST');
     expect(artifactCall?.requestBody).toContain('body-secret');
     expect(await pathExists(result.contextArtifacts.localStorage)).toBe(true);
+    expect(await pathExists(result.contextArtifacts.accessibility)).toBe(true);
+    expect(await readFile(result.contextArtifacts.accessibility, 'utf8')).toContain(
+      'PNT Context Fixture',
+    );
     const storageArtifact = JSON.parse(
       await readFile(result.contextArtifacts.localStorage, 'utf8'),
     ) as Record<string, string>;

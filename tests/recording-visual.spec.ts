@@ -7,10 +7,9 @@ import { startFixture } from './support/fixtures.js';
 import { saveScreenshot } from './support/screenshots.js';
 
 /**
- * Visual baselines for the recording flow: the recording bar (idle and
- * hovered), the FFmpeg blocking state, both comment dialogs, and the summary
- * carousel. Only elapsed/cut text moves between runs, so a small pixel
- * tolerance covers it.
+ * Visual baselines for the recording flow: the recording bar, the FFmpeg
+ * blocking state, both comment dialogs, and the summary carousel. Only
+ * elapsed/cut text moves between runs, so a small pixel tolerance covers it.
  */
 test('shows the recording bar, FFmpeg processing, and both comment dialogs', async () => {
   test.setTimeout(180_000);
@@ -51,16 +50,13 @@ test('shows the recording bar, FFmpeg processing, and both comment dialogs', asy
     await gated.getByRole('button', { name: 'Delete' }).click();
     await expect(gated).toHaveCount(0);
 
-    // 2. The recording bar, idle and with the stop control revealed on hover.
+    // 2. The recording bar. Stop is always visible, not hover-only.
     await startRecording(page);
     await expect(tab).toHaveAttribute('data-state', 'recording');
     await page.mouse.move(40, 400);
     await expect(tab.getByRole('status', { name: 'Recording in progress' })).toBeVisible();
-    await expect(stop).toBeHidden();
-    await saveScreenshot(page, 'recording-in-progress.png', { maxDiffPixels: 600 });
-    await tab.hover();
     await expect(stop).toBeVisible();
-    await saveScreenshot(page, 'recording-stop-hover.png', { maxDiffPixels: 600 });
+    await saveScreenshot(page, 'recording-in-progress.png', { maxDiffPixels: 600 });
 
     const box = (css: string) =>
       page.evaluate((style) => {

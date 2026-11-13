@@ -202,19 +202,24 @@ async function main(): Promise<void> {
     },
     stopRecording: () => recording.stop(),
     processRecording: () => recording.process(),
-    saveRecordingDraft: (comment) => recording.save(comment),
-    deleteRecordingDraft: () => recording.delete(),
     updateRecordingComment: async (recordingId, comment) => {
+      // A processed recording is a draft until its comment is saved.
+      if (state.recording.phase === 'draft' && state.recording.recording.recordingId === recordingId) {
+        return recording.save(comment);
+      }
       const item = state.recordings.find((item) => item.recordingId === recordingId);
       if (!item) throw new Error('Recording not found');
       item.comment = comment;
       return state;
     },
     deleteRecording: async (recordingId) => {
-      const recording = state.recordings.find((item) => item.recordingId === recordingId);
-      if (!recording) throw new Error('Recording not found');
+      if (state.recording.phase === 'draft' && state.recording.recording.recordingId === recordingId) {
+        return recording.delete();
+      }
+      const item = state.recordings.find((item) => item.recordingId === recordingId);
+      if (!item) throw new Error('Recording not found');
       await deleteSessionArtifacts(cutsDir(artifactsDir, recordingId));
-      state.recordings = state.recordings.filter((item) => item !== recording);
+      state.recordings = state.recordings.filter((entry) => entry !== item);
       return state;
     },
     openReview: async () => {

@@ -1,14 +1,16 @@
 import { useEffect, useState } from 'react';
-import { Layers2, Loader2, MousePointer2, Video } from 'lucide-react';
+import { Eraser, Layers2, Loader2, MousePointer2, PenLine, Undo2, Video } from 'lucide-react';
 import { AnnotationCanvas } from './AnnotationCanvas.js';
 import { AnnotationTools } from './AnnotationTools.js';
 import { CommentDialog } from './CommentDialog.js';
+import { Help } from './Help.js';
 import { IconButton } from './IconButton.js';
 import { Review } from './Review.js';
 import { apiRequest, errorMessage, sendJson, useAction } from './api.js';
 import { useAnnotation } from './useAnnotation.js';
 import { ViewportControls } from './ViewportControls.js';
 import type {
+  CaptureDraft,
   CaptureResult,
   ReviewContext,
   Selection,
@@ -44,10 +46,22 @@ function Elapsed({ since }: { since: number }) {
 function RecordingBar({
   since,
   phase,
+  pen,
+  canUndo,
+  canClear,
+  onTogglePen,
+  onUndo,
+  onClear,
   onStop,
 }: {
   since: number;
   phase: ActivePhase;
+  pen: boolean;
+  canUndo: boolean;
+  canClear: boolean;
+  onTogglePen: () => void;
+  onUndo: () => void;
+  onClear: () => void;
   onStop: () => void;
 }) {
   return (
@@ -58,10 +72,7 @@ function RecordingBar({
       data-state={phase}
       className="pointer-events-auto fixed inset-x-0 top-0 z-10 flex h-16 items-center justify-center gap-3 border-b-2 border-destructive/40 bg-red-50"
     >
-      <div
-        tabIndex={0}
-        className="group flex items-center gap-2 rounded-full border border-destructive/40 bg-card py-1 pr-1 pl-3 text-xs shadow-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-      >
+      <div className="flex items-center gap-2 rounded-full border border-destructive/40 bg-card py-1 pr-1 pl-3 text-xs shadow-sm">
         <span className="flex items-center gap-1.5 font-semibold tracking-wide text-destructive uppercase">
           <span aria-hidden="true" className="relative flex size-2.5">
             <span className="absolute inline-flex size-full animate-ping rounded-full bg-destructive opacity-60" />
@@ -76,7 +87,7 @@ function RecordingBar({
             size="sm"
             variant="destructive"
             aria-label="Stop recording"
-            className="hidden h-6 rounded-full px-2.5 group-focus-within:flex group-hover:flex"
+            className="h-6 rounded-full px-2.5"
             onClick={onStop}
           >
             Stop
@@ -87,6 +98,31 @@ function RecordingBar({
           </span>
         )}
       </div>
+      {phase === 'recording' && (
+        <div className="flex items-center gap-1 rounded-full border bg-card p-1 shadow-sm">
+          <IconButton
+            content="Draw on the page"
+            label="Pen"
+            variant={pen ? 'secondary' : 'ghost'}
+            aria-pressed={pen}
+            onClick={onTogglePen}
+          >
+            <PenLine aria-hidden="true" />
+          </IconButton>
+          <IconButton content="Undo stroke" label="Undo" variant="ghost" disabled={!canUndo} onClick={onUndo}>
+            <Undo2 aria-hidden="true" />
+          </IconButton>
+          <IconButton
+            content="Clear strokes"
+            label="Clear strokes"
+            variant="ghost"
+            disabled={!canClear}
+            onClick={onClear}
+          >
+            <Eraser aria-hidden="true" />
+          </IconButton>
+        </div>
+      )}
     </div>
   );
 }
@@ -94,8 +130,9 @@ function RecordingBar({
 export function Overlay({ apiUrl }: { apiUrl: string }) {
   const [state, setState] = useState<SessionState>();
   const [annotating, setAnnotating] = useState(false);
+  const [pen, setPen] = useState(false);
   const [replaceId, setReplaceId] = useState<string>();
-  const [selection, setSelection] = useState<Selection>();
+  const [pending, setPending] = useState<CaptureDraft>();
   const [reviewContext, setReviewContext] = useState<ReviewContext>();
   const [actualViewport, setActualViewport] = useState(() => ({
     width: window.innerWidth,
@@ -107,7 +144,10 @@ export function Overlay({ apiUrl }: { apiUrl: string }) {
 
   const recording = state?.recording ?? { phase: 'idle' };
   const phase = recording.phase;
-  const draft = recording.phase === 'draft' ? recording.recording : undefined;
+  const recordingDraft = recording.phase === 'draft' ? recording.recording : undefined;
+  // One dialog for both kinds: a pending screenshot or a processed recording.
+  const commentDraft: CaptureDraft | undefined =
+    pending ?? (recordingDraft ? { kind: 'recording', recording: recordingDraft } : undefined);
   const active =
     recording.phase === 'starting' ||
     recording.phase === 'recording' ||
@@ -187,13 +227,20 @@ export function Overlay({ apiUrl }: { apiUrl: string }) {
         replaceId,
       });
       setState(captured.state);
-      setSelection(captured.draft.kind === 'selection' ? captured.draft.selection : undefined);
+      setPending(captured.draft);
       reset();
     });
   };
 
-  const startRecording = () => void send('/recording/start');
-  const stopRecording = () => void send('/recording/stop');
+  const startRecording = () => {
+    reset();
+    setPen(false);
+    void send('/recording/start');
+  };
+  const stopRecording = () => {
+    setPen(false);
+    void send('/recording/stop');
+  };
 
   const openReview = () => {
     void run(async () => {
@@ -244,9 +291,13 @@ export function Overlay({ apiUrl }: { apiUrl: string }) {
 
   return (
     <>
-      {annotating && phase === 'idle' && (
-        <AnnotationCanvas annotation={annotation} selectionNumber={count + 1} />
-      )}
+      {(annotating && phase === 'idle') || active ? (
+        <AnnotationCanvas
+          annotation={annotation}
+          selectionNumber={count + 1}
+          interactive={active ? active.phase === 'recording' && pen : true}
+        />
+      ) : null}
 
       {processing && (
         <div className="pointer-events-auto fixed inset-0 z-30 flex items-center justify-center bg-background">
@@ -271,9 +322,18 @@ export function Overlay({ apiUrl }: { apiUrl: string }) {
         <RecordingBar
           phase={active.phase}
           since={Date.parse(active.startedAt)}
+          pen={pen}
+          canUndo={annotationState.strokes.length > 0}
+          canClear={annotationState.strokes.length > 0 || annotationState.redoStrokes.length > 0}
+          onTogglePen={() => {
+            if (!pen) dispatch({ type: 'tool', value: 'pen' });
+            setPen(!pen);
+          }}
+          onUndo={() => dispatch({ type: 'undo' })}
+          onClear={() => dispatch({ type: 'clear' })}
           onStop={stopRecording}
         />
-      ) : phase === 'idle' && !selection ? (
+      ) : phase === 'idle' && !commentDraft ? (
         <div className="pnt-toolbar-anchor">
           <Card
             id="pnt-controls"
@@ -295,21 +355,9 @@ export function Overlay({ apiUrl }: { apiUrl: string }) {
               ) : (
                 <>
                   <IconButton
-                    content="Review saved captures"
-                    label="Open session summary"
-                    variant="secondary"
-                    disabled={busy || !count}
-                    onClick={openReview}
-                    className="gap-1"
-                  >
-                    <Layers2 aria-hidden="true" />
-                    <span role="status" aria-label={`${count} saved captures`} className="text-[10px]">
-                      {count}
-                    </span>
-                  </IconButton>
-                  <IconButton
                     content="Annotate"
                     label="Start annotation"
+                    variant="secondary"
                     onClick={() => {
                       reset();
                       setAnnotating(true);
@@ -326,8 +374,27 @@ export function Overlay({ apiUrl }: { apiUrl: string }) {
                   >
                     <Video aria-hidden="true" />
                   </IconButton>
+                  <Help />
                 </>
               )}
+              <Separator orientation="vertical" className="h-7 shrink-0" />
+              <IconButton
+                content="Review saved captures"
+                label="Open session summary"
+                variant="default"
+                disabled={busy || !count}
+                onClick={openReview}
+                className="gap-1"
+              >
+                <Layers2 aria-hidden="true" />
+                <span
+                  role="status"
+                  aria-label={`${count} saved captures`}
+                  className="text-[10px] font-semibold"
+                >
+                  {count}
+                </span>
+              </IconButton>
             </CardHeader>
 
             {(mismatch || error) && (
@@ -346,21 +413,13 @@ export function Overlay({ apiUrl }: { apiUrl: string }) {
         </div>
       ) : null}
 
-      {draft && (
+      {commentDraft && (
         <CommentDialog
           apiUrl={apiUrl}
-          draft={{ kind: 'recording', recording: draft }}
-          onDone={setState}
-        />
-      )}
-
-      {selection && (
-        <CommentDialog
-          apiUrl={apiUrl}
-          draft={{ kind: 'selection', selection }}
+          draft={commentDraft}
           onDone={(next) => {
             setState(next);
-            setSelection(undefined);
+            setPending(undefined);
           }}
         />
       )}

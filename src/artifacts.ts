@@ -45,23 +45,26 @@ export async function cleanupExpiredArtifacts(root: string): Promise<string[]> {
 }
 
 /**
- * Persists the full console, network, and localStorage payloads next to the
- * captured images. These files keep data that is too noisy for CLI output.
+ * Persists the full console, network, localStorage, and accessibility payloads
+ * next to the captured images. These files keep data that is too noisy for CLI
+ * output.
  */
 export async function writeContextArtifacts(
   dir: string,
-  context: Pick<SessionSnapshot, 'console' | 'network' | 'storage'>,
+  context: Pick<SessionSnapshot, 'console' | 'network' | 'storage' | 'accessibility'>,
 ): Promise<ContextArtifacts> {
   const paths = {
     console: join(dir, 'console.json'),
     network: join(dir, 'network.json'),
     localStorage: join(dir, 'localstorage.json'),
+    accessibility: join(dir, 'a11y.yml'),
   };
   await mkdir(dir, { recursive: true });
   await Promise.all([
     writeFile(paths.console, JSON.stringify(context.console, null, 2)),
     writeFile(paths.network, JSON.stringify(context.network, null, 2)),
     writeFile(paths.localStorage, JSON.stringify(context.storage.localStorage, null, 2)),
+    writeFile(paths.accessibility, context.accessibility ?? ''),
   ]);
   return paths;
 }

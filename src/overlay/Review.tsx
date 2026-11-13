@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { Camera, PencilLine, Send, Trash2 } from 'lucide-react';
+import { Camera, PencilLine, Send, Trash2, X } from 'lucide-react';
 import type { Recording, ReviewContext, Selection, SessionState, SubmissionResult } from '../types.js';
 import { sendJson, useAction } from './api.js';
 import { CutCarousel, cutImages } from './CutCarousel.js';
@@ -118,52 +118,23 @@ export function Review({
       >
         <DialogTitle className="sr-only">Session summary</DialogTitle>
         <DialogDescription className="sr-only">Review saved captures before submitting.</DialogDescription>
-        <header className="flex flex-wrap items-center gap-2 px-3 py-2">
+        <header className="flex items-center gap-2 px-3 py-2">
           <div className="min-w-0 flex-1">
             <h1 className="truncate text-sm font-semibold">{state.session.chatTitle}</h1>
             <p className="truncate text-[11px] text-muted-foreground">
               {items.length} included · {state.session.sessionRef}
             </p>
           </div>
-          <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-            <Switch
-              id="pnt-redact-credentials"
-              aria-label="Redact credentials"
-              checked={redactCredentials}
-              disabled={busy}
-              onCheckedChange={setRedactCredentials}
-            />
-            <Label htmlFor="pnt-redact-credentials" className="text-[11px] text-muted-foreground">
-              Redact credentials
-            </Label>
-          </div>
-          {confirmDiscard && (
-            <span className="text-[11px] text-muted-foreground">Discard session and delete captures?</span>
-          )}
           <Button
             type="button"
-            variant="outline"
-            size="sm"
+            variant="ghost"
+            size="icon"
+            aria-label="Close"
             disabled={busy}
-            onClick={() => (confirmDiscard ? setConfirmDiscard(false) : onClose())}
+            onClick={onClose}
           >
-            {confirmDiscard ? 'Cancel' : 'Close'}
+            <X aria-hidden="true" />
           </Button>
-          <Button
-            type="button"
-            variant="destructive"
-            size="sm"
-            disabled={busy}
-            onClick={confirmDiscard ? discard : () => setConfirmDiscard(true)}
-          >
-            {confirmDiscard ? 'Confirm discard' : 'Discard'}
-          </Button>
-          {!confirmDiscard && (
-            <Button type="button" size="sm" disabled={busy || items.length === 0} onClick={submit}>
-              <Send aria-hidden="true" />
-              Submit
-            </Button>
-          )}
         </header>
         <Separator />
 
@@ -171,8 +142,9 @@ export function Review({
           <nav
             ref={navRef}
             aria-label="Saved selections"
-            className="flex flex-col gap-1 border-b p-2 lg:overflow-y-auto lg:border-b-0 lg:border-r"
+            className="flex min-h-0 flex-col border-b lg:border-b-0 lg:border-r"
           >
+            <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto p-2">
             {items.map((item) => {
               // A capture from another page cannot be compared at all.
               const otherUrl = item.capture.page.url !== context.url;
@@ -218,7 +190,79 @@ export function Review({
                 </Button>
               );
             })}
-            {items.length === 0 && <p className="p-3 text-xs text-muted-foreground">No captures remain.</p>}
+              {items.length === 0 && <p className="p-3 text-xs text-muted-foreground">No captures remain.</p>}
+            </div>
+
+            {/* Session-level actions sit here, not in the header: they apply to
+                the whole list, not to the selected capture. */}
+            <div className="space-y-2 border-t p-2">
+              <p className="text-[10px] font-semibold tracking-wide text-muted-foreground uppercase">
+                Session
+              </p>
+              <div className="flex items-center justify-between gap-2">
+                <Label htmlFor="pnt-redact-credentials" className="text-[11px] text-muted-foreground">
+                  Redact credentials
+                </Label>
+                <Switch
+                  id="pnt-redact-credentials"
+                  aria-label="Redact credentials"
+                  checked={redactCredentials}
+                  disabled={busy}
+                  onCheckedChange={setRedactCredentials}
+                />
+              </div>
+              <Button
+                type="button"
+                size="sm"
+                className="w-full"
+                disabled={busy || items.length === 0}
+                onClick={submit}
+              >
+                <Send aria-hidden="true" />
+                Submit
+              </Button>
+              {confirmDiscard ? (
+                <div className="space-y-1.5">
+                  <p className="text-[11px] text-muted-foreground">
+                    Discard the session and delete every capture?
+                  </p>
+                  <div className="flex gap-1.5">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="flex-1"
+                      disabled={busy}
+                      onClick={() => setConfirmDiscard(false)}
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="destructive"
+                      size="sm"
+                      className="flex-1"
+                      disabled={busy}
+                      onClick={discard}
+                    >
+                      Confirm discard
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="w-full"
+                  disabled={busy}
+                  onClick={() => setConfirmDiscard(true)}
+                >
+                  <Trash2 aria-hidden="true" />
+                  Discard
+                </Button>
+              )}
+            </div>
           </nav>
 
           <section aria-label="Capture preview" className="flex min-h-0 flex-col border-b p-3 lg:border-b-0 lg:border-r">

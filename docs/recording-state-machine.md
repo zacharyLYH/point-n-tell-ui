@@ -157,8 +157,8 @@ Server routes map directly to controller events:
 - `POST /recording/start`
 - `POST /recording/stop`
 - `POST /recording/process`
-- `POST /recording/save`
-- `DELETE /recording/draft`
+- `PATCH /recording/:id` saves the draft (same item route as a saved recording)
+- `DELETE /recording/:id` discards the draft (same item route as a saved recording)
 
 If the client refreshes during `recording`, the overlay can show the recording bar and stop it again. If it refreshes during `stopped`, it can invoke `process` or discard the capture. If it refreshes during `processing`, it can show the processing state and wait for the draft.
 

@@ -54,7 +54,10 @@ export function formatReady({
       ['artifacts', artifactsDir],
     ]),
     RULE,
-    ' Press Ctrl+C to close.',
+    ' Next: pick a viewport, then Annotate for a screenshot or Record for a video.',
+    '       Save each capture with a comment, then open the layers icon to review.',
+    '       Nothing reaches the agent until Submit. Ctrl+C closes the session.',
+    RULE,
   ].join('\n');
 }
 
@@ -117,6 +120,10 @@ export function formatSubmit(manifest: SubmissionResult): string {
       [
         'localStorage',
         `${contextArtifacts.localStorage} (${count(Object.keys(context.storage.localStorage).length, 'key')})`,
+      ],
+      [
+        'a11y',
+        `${contextArtifacts.accessibility} (${count(context.accessibility?.split('\n').length ?? 0, 'line')})`,
       ],
     ]),
     RULE,

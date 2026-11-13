@@ -84,12 +84,12 @@ function reducer(state: AnnotationState, action: AnnotationAction): AnnotationSt
       return { ...state, tool: action.value };
     case 'start':
       if (state.tool === 'pen') {
-        return state.rectangle && inside(action.point, state.rectangle)
-          ? {
-              ...state,
-              gesture: { tool: 'pen', points: [boundedPoint(action.point, state.rectangle)] },
-            }
-          : state;
+        // Freehand without a rectangle, so recording can annotate the live page.
+        if (state.rectangle && !inside(action.point, state.rectangle)) {
+          return state;
+        }
+        const point = state.rectangle ? boundedPoint(action.point, state.rectangle) : action.point;
+        return { ...state, gesture: { tool: 'pen', points: [point] } };
       }
       return {
         ...state,

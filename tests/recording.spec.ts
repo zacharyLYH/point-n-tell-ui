@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import { mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -327,8 +327,8 @@ test('records chrome-free cuts at desktop, tablet, and mobile sizes', async () =
 
       await startRecording(page);
       await expect(tab).toHaveAttribute('data-state', 'recording');
-      // The stop control only surfaces on hover.
-      await expect(stop).toBeHidden();
+      // Stop is always visible, so recording never hides its only exit.
+      await expect(stop).toBeVisible();
       // The 64px band stays reserved: it is chrome, never app content.
       expect(await page.evaluate(() => getComputedStyle(document.body).paddingTop)).toBe('64px');
 
@@ -658,5 +658,125 @@ test('recording reports FFmpeg problems and never saves a partial capture', asyn
     expect((await sessionState(failing.cli.ready.apiUrl)).selections).toHaveLength(1);
   } finally {
     await session.cleanup();
+  }
+});
+
+test('draws on the page while recording without blocking the app', async () => {
+  test.setTimeout(120_000);
+
+  const { fixture, launch, cleanup } = await startSession('pnt-record-pen-');
+
+  try {
+    const { page } = await launch({ url: fixture.url, sessionId: 'record-pen' });
+    await startRecording(page);
+
+    const pen = page.getByRole('button', { name: 'Pen' });
+    const canvas = page.locator('svg[aria-label="Annotation canvas"]');
+    await expect(pen).toHaveAttribute('aria-pressed', 'false');
+    await pen.click();
+    await expect(pen).toHaveAttribute('aria-pressed', 'true');
+
+    // Pen strokes belong to the overlay, so the app never sees the click.
+    await page.mouse.move(200, 320);
+    await page.mouse.down();
+    await page.mouse.move(420, 420, { steps: 6 });
+    await page.mouse.up();
+    await expect(canvas.locator('path')).toHaveCount(1);
+    await expect(page.locator('body')).not.toHaveAttribute('data-clicked', 'yes');
+
+    // Turning the pen off restores app interaction and keeps the stroke visible.
+    await pen.click();
+    await expect(pen).toHaveAttribute('aria-pressed', 'false');
+    await expect(canvas.locator('path')).toHaveCount(1);
+    await page.locator('#app-button').click();
+    await expect(page.locator('body')).toHaveAttribute('data-clicked', 'yes');
+
+    await stopRecording(page);
+  } finally {
+    await cleanup();
+  }
+});
+
+/** Decodes a cut in the page so stroke placement can be checked without an image library. */
+async function sampleCut(page: Page, path: string, points: { x: number; y: number }[]) {
+  const encoded = (await readFile(path)).toString('base64');
+  return page.evaluate(
+    async ({ data, points }) => {
+      const image = new Image();
+      image.src = `data:image/jpeg;base64,${data}`;
+      await image.decode();
+      const canvas = document.createElement('canvas');
+      canvas.width = image.naturalWidth;
+      canvas.height = image.naturalHeight;
+      const context = canvas.getContext('2d')!;
+      context.drawImage(image, 0, 0);
+      return {
+        width: canvas.width,
+        height: canvas.height,
+        pixels: points.map(({ x, y }) =>
+          Array.from(context.getImageData(x, y, 1, 1).data).slice(0, 3),
+        ),
+      };
+    },
+    { data: encoded, points },
+  );
+}
+
+test('pen strokes land in the cut at every viewport', async () => {
+  test.setTimeout(180_000);
+
+  const { fixture, launch, cleanup } = await startSession('pnt-record-pen-viewports-');
+
+  try {
+    const { cli, page } = await launch({ url: fixture.url, sessionId: 'record-pen-viewports' });
+    const canvas = page.locator('svg[aria-label="Annotation canvas"]');
+    const presets = [/Desktop viewport/, /Tablet viewport/, /Mobile viewport/];
+    const measured: { width: number; height: number; rows: number[] }[] = [];
+
+    for (const preset of presets) {
+      await page.getByRole('button', { name: preset }).click();
+      const [width, height] = await page.evaluate(() => [innerWidth, innerHeight]);
+      const rows = [0.3, 0.45, 0.6].map((fraction) => Math.round(height * fraction));
+      measured.push({ width, height, rows });
+
+      await startRecording(page);
+      await page.getByRole('button', { name: 'Pen' }).click();
+      for (const y of rows) {
+        await page.mouse.move(60, y);
+        await page.mouse.down();
+        await page.mouse.move(300, y, { steps: 8 });
+        await page.mouse.up();
+      }
+      // Multiple strokes stay separate paths.
+      await expect(canvas.locator('path')).toHaveCount(3);
+
+      await page.waitForTimeout(500);
+      const dialog = await stopRecording(page);
+      await dialog.getByLabel('Capture comment').fill(`Pen at ${width}`);
+      await dialog.getByRole('button', { name: 'Save capture' }).click();
+      await expect(dialog).toHaveCount(0);
+    }
+
+    const state = await sessionState(cli.ready.apiUrl);
+    expect(state.recordings).toHaveLength(3);
+
+    for (const [index, preset] of measured.entries()) {
+      const recording = state.recordings[index];
+      const last = recording.cuts.at(-1)!;
+      // The cut drops the 64px band, so a stroke drawn at y sits at y - 64.
+      const shot = await sampleCut(
+        page,
+        last.imagePath,
+        preset.rows.map((y) => ({ x: 180, y: y - 64 })),
+      );
+      expect(shot.width).toBe(preset.width);
+      expect(shot.height).toBe(preset.height - 64);
+      for (const [red, , blue] of shot.pixels) {
+        expect(blue).toBeGreaterThan(red + 60);
+        expect(blue).toBeGreaterThan(120);
+      }
+    }
+  } finally {
+    await cleanup();
   }
 });

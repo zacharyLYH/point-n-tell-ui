@@ -23,20 +23,18 @@ export function CommentDialog({
   draft: CaptureDraft;
   onDone: (state: SessionState) => void;
 }) {
-  const isRecording = draft.kind === 'recording';
-  const id = draft.kind === 'recording' ? draft.recording.recordingId : draft.selection.selectionId;
-  const images = isRecording ? cutImages(draft.recording, true) : [{ id, label: 'Screenshot' }];
+  const kind = draft.kind;
+  const isRecording = kind === 'recording';
+  const id = kind === 'recording' ? draft.recording.recordingId : draft.selection.selectionId;
+  const images = kind === 'recording' ? cutImages(draft.recording, true) : [{ id, label: 'Screenshot' }];
   const [comment, setComment] = useState(
-    draft.kind === 'recording' ? draft.recording.comment : draft.selection.comment,
+    kind === 'recording' ? draft.recording.comment : draft.selection.comment,
   );
   const { busy, error, run } = useAction();
 
-  const settle = (method: 'POST' | 'PATCH' | 'DELETE', body?: unknown) => {
-    const url = isRecording
-      ? `${apiUrl}/recording/${method === 'POST' ? 'save' : 'draft'}`
-      : `${apiUrl}/selection/${id}`;
-    void run(async () => onDone(await sendJson<SessionState>(url, body, method)));
-  };
+  // Both kinds save and discard through the same item routes.
+  const settle = (method: 'PATCH' | 'DELETE', body?: unknown) =>
+    void run(async () => onDone(await sendJson<SessionState>(`${apiUrl}/${kind}/${id}`, body, method)));
 
   return (
     <Dialog open onOpenChange={(open) => !open && settle('DELETE')}>
@@ -86,9 +84,7 @@ export function CommentDialog({
             type="button"
             size="sm"
             disabled={busy || !comment.trim()}
-            onClick={() =>
-              settle(isRecording ? 'POST' : 'PATCH', { comment: comment.trim() })
-            }
+            onClick={() => settle('PATCH', { comment: comment.trim() })}
           >
             Save capture
           </Button>
