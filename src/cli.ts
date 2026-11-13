@@ -76,6 +76,7 @@ async function main(): Promise<void> {
   let launched: Awaited<ReturnType<typeof launchApp>> | undefined;
   let reviewContext: ReviewContext | undefined;
   let outcome: 'submitted' | 'discarded' | undefined;
+  let ownsArtifacts = false;
   let endSession = () => {};
   const ended = new Promise<void>((resolve) => {
     endSession = () => resolve();
@@ -292,6 +293,18 @@ async function main(): Promise<void> {
 
   try {
     await cleanupExpiredArtifacts(root);
+    await mkdir(root, { recursive: true });
+    try {
+      // Reserving the directory makes a duplicate ref fail atomically, before
+      // any browser or server state can touch the existing session.
+      await mkdir(artifactsDir);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+        throw new Error(`Session ref collision: ${session.sessionRef}`);
+      }
+      throw error;
+    }
+    ownsArtifacts = true;
     launched = await launchApp({
       url: url.href,
       profileDir,
@@ -329,7 +342,7 @@ async function main(): Promise<void> {
     await Promise.race([ended, exit]);
   } finally {
     await recording.dispose().catch(() => undefined);
-    if (outcome !== 'submitted') {
+    if (ownsArtifacts && outcome !== 'submitted') {
       await deleteSessionArtifacts(artifactsDir).catch(() => undefined);
     }
     await api.close().catch(() => undefined);

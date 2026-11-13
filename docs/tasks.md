@@ -77,9 +77,16 @@ Record normal app use with a recording-level comment and sampled frames, not ful
 
 ## 7. Concurrent sessions and recovery paths
 
-Exercise concurrent sessions and session behavior after browser disconnect, CLI cancellation, and hard kill/crash, including the documented cleanup outcomes.
+Run multiple sessions concurrently against a shared Chromium profile and artifact root. Exercise per-session viewport and operation isolation, session termination while other sessions remain active, duplicate session refs, and recovery after browser disconnect, CLI cancellation, and hard kill/crash. Verify age-based cleanup and its behavior at the retention boundary and when cleanup encounters an invalid or partially removable session directory.
 
 **Success criteria — tested behavior**
 
-- Concurrent sessions can use different viewport sizes, captures retain the viewport selected for their session, and operations against one explicit session ref do not affect the other session.
-- Disconnect, cancellation, and crash scenarios produce the cleanup and retention outcomes in the README's session lifecycle table.
+- Two or more live sessions share the configured Chromium profile and artifact root, use different viewport sizes, and save captures whose recorded viewport and image dimensions match their own session.
+- Operations addressed to one explicit session ref (viewport changes, capture, edit, delete, submit, and discard) affect only that session's state and artifacts; the other session remains usable and its state and files remain unchanged.
+- Disconnecting the browser or cancelling the CLI for one session deletes that session's unsubmitted artifacts and returns no payload, while another live session continues operating normally.
+- Submitting a session prints its manifest and retains its artifacts; discarding a session returns no payload and deletes its artifacts, without changing another session's artifacts.
+- Launching a second session with a duplicate session ref has a defined, tested outcome: it is rejected without modifying or deleting the existing session's state or artifacts.
+- Abruptly killing the CLI after artifacts are created can leave those artifacts in place, returns no payload, and does not damage other sessions. A subsequent CLI invocation removes only artifacts older than the documented one-month retention period.
+- Cleanup preserves artifacts younger than the retention threshold and removes artifacts older than it, including cases immediately on either side of the one-month boundary.
+- A malformed, unreadable, or partially removable artifact directory does not prevent a new session from launching or cleanup of other eligible directories; any retained files follow a defined and tested outcome.
+- Each scenario's payload and artifact retention/deletion outcome matches the README session lifecycle table.

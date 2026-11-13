@@ -562,6 +562,92 @@ test('screenshot captures save or delete through the shared capture modal', asyn
   }
 });
 
+test('deleting or dismissing an unsaved recording draft removes its cuts', async () => {
+  test.setTimeout(180_000);
+
+  const fixture = await startFixture();
+  const { launch, cleanup } = trackSession(fixture, await mkdtemp(join(tmpdir(), 'pnt-draft-delete-')));
+
+  try {
+    const { cli, page, artifactsDir } = await launch({ url: fixture.url, sessionId: 'draft-delete' });
+
+    const record = async () => {
+      await page.getByRole('button', { name: 'Start recording' }).click();
+      await page.locator('#app-button').click();
+      await page.waitForTimeout(450);
+      await page.getByRole('region', { name: 'Recording controls' }).hover();
+      await page.getByRole('button', { name: 'Stop recording' }).click();
+      const dialog = page.getByRole('dialog', { name: 'Save video capture' });
+      await expect(dialog).toBeVisible();
+      return dialog;
+    };
+    const draftCutsDir = async () => {
+      const state = await sessionState(cli.ready.apiUrl);
+      if (state.recording.phase !== 'draft') throw new Error('Expected a recording draft');
+      return dirname(state.recording.recording.cuts[0].imagePath);
+    };
+
+    const deleted = await record();
+    const firstCuts = await draftCutsDir();
+    expect(await pathExists(firstCuts)).toBe(true);
+    await deleted.getByRole('button', { name: 'Delete' }).click();
+    await expect(deleted).toHaveCount(0);
+
+    let state = await sessionState(cli.ready.apiUrl);
+    expect(state.recordings).toEqual([]);
+    expect(state.recording.phase).toBe('idle');
+    expect(await pathExists(firstCuts)).toBe(false);
+    expect((await readdir(artifactsDir)).filter((name) => name.startsWith('rec-'))).toEqual([]);
+    await expect(page.getByRole('region', { name: 'Point and Tell toolbar' })).toBeVisible();
+
+    const dismissed = await record();
+    const secondCuts = await draftCutsDir();
+    await dismissed.getByRole('button', { name: 'Close' }).click();
+    await expect(dismissed).toHaveCount(0);
+
+    state = await sessionState(cli.ready.apiUrl);
+    expect(state.recordings).toEqual([]);
+    expect(state.recording.phase).toBe('idle');
+    expect(await pathExists(secondCuts)).toBe(false);
+    expect((await readdir(artifactsDir)).filter((name) => name.startsWith('rec-'))).toEqual([]);
+  } finally {
+    await cleanup();
+  }
+});
+
+test('disconnect or cancellation while recording removes frames and artifacts', async () => {
+  test.setTimeout(180_000);
+
+  const fixture = await startFixture();
+  const { launch, cleanup } = trackSession(
+    fixture,
+    await mkdtemp(join(tmpdir(), 'pnt-record-abort-')),
+  );
+
+  const start = async (sessionId: string) => {
+    const recording = await launch({ url: fixture.url, sessionId });
+    await recording.page.getByRole('button', { name: 'Start recording' }).click();
+    await expect(recording.page.getByRole('region', { name: 'Recording controls' })).toBeVisible();
+    await expect
+      .poll(async () => (await readdir(recording.artifactsDir)).some((name) => name.startsWith('.frames-')))
+      .toBe(true);
+    return recording;
+  };
+
+  try {
+    const disconnected = await start('record-disconnect');
+    await disconnected.page.close();
+    await waitForExit(disconnected.cli.child);
+    expect(await pathExists(disconnected.artifactsDir)).toBe(false);
+
+    const cancelled = await start('record-cancel');
+    await stopCli(cancelled.cli.child);
+    expect(await pathExists(cancelled.artifactsDir)).toBe(false);
+  } finally {
+    await cleanup();
+  }
+});
+
 test('recording reports FFmpeg problems and never saves a partial capture', async () => {
   test.setTimeout(180_000);
 

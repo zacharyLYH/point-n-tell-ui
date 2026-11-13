@@ -95,7 +95,7 @@ export async function stopCli(child: ChildProcess): Promise<void> {
 }
 
 export async function waitForExit(child: ChildProcess): Promise<void> {
-  if (child.exitCode !== null) {
+  if (child.exitCode !== null || child.signalCode !== null) {
     return;
   }
   await new Promise<void>((resolve) => child.once('exit', () => resolve()));

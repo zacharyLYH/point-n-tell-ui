@@ -81,7 +81,7 @@ Agents can read images from `imagePath` and request a follow-up capture through 
 - **CLI output:** prints the session ref, app URL, overlay URL, and artifact directory. Set `PNT_MACHINE=1` for JSON lines an agent can parse. On submit it prints a session header, then one section per image or recording with its `type`, `comment`, image path, page, and viewport, then the full manifest as the final JSON line; the session then closes.
 - **Session API:** the CLI starts an ephemeral `127.0.0.1` API, launches or attaches Chrome, and injects overlay configuration. The overlay uses the API for selection state and rehydration; it cannot access disk.
 - **Open session:** persists through refresh and navigation until submit, discard, CLI exit, or browser disconnect.
-- **Concurrency:** multiple sessions are supported; operations target an explicit session ref.
+- **Concurrency:** multiple sessions are supported; operations target an explicit session ref. A duplicate ref is rejected before it can modify the existing session's state or artifacts.
 
 ### Cleanup
 
