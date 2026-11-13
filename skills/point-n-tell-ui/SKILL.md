@@ -84,6 +84,7 @@ Recording blocks replace `image` with `images` (ordered cut paths), `cuts`, and 
 ## Sharp edges
 
 - Do not refresh during a capture: the CLI keeps a pending selection the overlay loses. If it happens, restart the session.
+- The session follows the tab the CLI opened. Navigate in that tab; a new tab would still capture the original page.
 - Recording starts instantly; FFmpeg runs only after Stop.
 - The recording pen blocks page clicks until it is toggled off. Strokes are burned into the frames, not saved as data.
 - A session ref names artifacts. It does not reattach to a live session.

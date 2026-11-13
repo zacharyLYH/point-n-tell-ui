@@ -600,6 +600,52 @@ test('context checks are relative to the capture viewport', async () => {
   }
 });
 
+test('keeps one session across different page urls', async () => {
+  test.setTimeout(120_000);
+
+  const { fixture, launch, cleanup } = await startSession('pnt-urls-');
+
+  try {
+    const { cli, page } = await launch({ sessionId: 'page-urls' });
+    await page.waitForLoadState('networkidle');
+    const checkoutUrl = page.url();
+
+    await drawSelection(page, 'Checkout total', [80, 120], [260, 260]);
+    await page.goto(`${fixture.url}/receipt`, { waitUntil: 'domcontentloaded' });
+    const receiptUrl = page.url();
+
+    // The overlay rehydrates on the new URL with the saved capture intact.
+    await expect(page.getByRole('region', { name: 'Point and Tell toolbar' })).toBeVisible();
+    await expect(page.getByRole('status', { name: '1 saved captures' })).toBeVisible();
+    await drawSelection(page, 'Receipt missing total', [90, 150], [300, 320]);
+
+    const state = await sessionState(cli.ready.apiUrl);
+    expect(state.selections.map((item) => item.comment)).toEqual([
+      'Checkout total',
+      'Receipt missing total',
+    ]);
+    expect(state.selections.map((item) => item.page.url)).toEqual([checkoutUrl, receiptUrl]);
+
+    await page.getByRole('button', { name: 'Open session summary' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Session summary' });
+    await expect(dialog.getByText(/2 included/)).toBeVisible();
+    // Only the capture from the other URL is flagged.
+    await expect(dialog.getByText("Can't check context")).toHaveCount(1);
+
+    await page.getByRole('button', { name: 'Submit' }).click();
+    await waitForExit(cli.child);
+    const result = JSON.parse(
+      cli.output().split('\n').filter((line) => line.startsWith('{')).at(-1)!,
+    ) as SubmissionResult;
+    expect(result.selections.map((item) => item.page.url)).toEqual([checkoutUrl, receiptUrl]);
+    for (const imagePath of result.imagePaths) {
+      expect(await pathExists(imagePath)).toBe(true);
+    }
+  } finally {
+    await cleanup();
+  }
+});
+
 test('submits included selections with context and keeps artifacts', async () => {
   test.setTimeout(120_000);
 

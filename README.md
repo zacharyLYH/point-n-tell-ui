@@ -11,7 +11,7 @@ npm ci
 ./scripts/demo.sh
 ```
 
-Builds, starts a sample checkout app (SQLite cart API, session cookie, console events, seeded credentials), then opens the overlay on it. Try viewports, annotating the order summary, `NORTHSTAR10`, editing the cart, placing an order. Ctrl+C stops everything. Profile and artifacts stay in `~/.point-n-tell-ui/demo/`; demo state starts clean each run. `PNT_DEMO_PORT` and `PNT_DEMO_STATE_DIR` relocate them.
+Builds, starts a sample checkout app (SQLite cart API, session cookie, console events, seeded credentials), then opens the overlay on it. Try viewports, annotating the order summary, `NORTHSTAR10`, editing the cart, placing an order, then opening `/receipt` — a different URL that keeps the same session and captures. Ctrl+C stops everything. Profile and artifacts stay in `~/.point-n-tell-ui/demo/`; demo state starts clean each run. `PNT_DEMO_PORT` and `PNT_DEMO_STATE_DIR` relocate them.
 
 ## First run
 
@@ -68,6 +68,7 @@ Artifacts under `~/.point-n-tell-ui/artifacts/<sessionRef>/`: WebP screenshots, 
 - Ref is `harness__chat-title__session-id`, filesystem-safe. A duplicate live ref is rejected.
 - Root `~/.point-n-tell-ui/` holds `chromium-profile/` and `artifacts/`. Override with `PNT_HOME`, `PNT_PROFILE_DIR`, or `PNT_ARTIFACTS_DIR`.
 - Sessions run concurrently; every operation targets an explicit ref.
+- One tracked tab: navigation to any URL keeps the session, but captures always come from the tab the CLI opened. Navigate in that window, not a new tab.
 - The CLI serves an ephemeral `127.0.0.1` API to the overlay. The overlay never touches disk.
 
 ## Lifecycle

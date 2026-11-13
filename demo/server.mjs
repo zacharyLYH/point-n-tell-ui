@@ -102,6 +102,7 @@ const page = `<!doctype html>
     .status { min-height: 18px; margin: 11px 0 0; color: #568178; font-size: 12px; }
     .dev-tools { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 28px; }
     .footer { padding: 22px 0 4px; color: #96a1a3; font-size: 11px; text-align: center; }
+    .footer a { color: #276c63; font-weight: 650; }
     @media (max-width: 700px) {
       .shell { padding: 18px 14px; }
       .topbar { margin-bottom: 28px; }
@@ -162,7 +163,7 @@ const page = `<!doctype html>
         <p id="order-status" class="status" aria-live="polite"></p>
       </aside>
     </div>
-    <footer class="footer">Northstar Supply · Thoughtful things for everyday life</footer>
+    <footer class="footer">Northstar Supply · Thoughtful things for everyday life · <a href="/receipt">Receipt</a></footer>
   </main>
   <script>
     if (!localStorage.getItem('pnt-demo-initialized')) {
@@ -256,6 +257,60 @@ const page = `<!doctype html>
       }
     });
     loadCart();
+  </script>
+</body>
+</html>`;
+
+// A second page at a different URL. Navigating here must keep the same session.
+const receiptPage = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Northstar Supply · Receipt</title>
+  <style>
+    body { margin: 0; font-family: Inter, ui-sans-serif, system-ui, sans-serif; color: #202d39; background: #f5f7f8; }
+    .shell { max-width: 680px; margin: auto; padding: 32px 24px; }
+    .brand { display: flex; gap: 10px; align-items: center; margin-bottom: 26px; font-weight: 750; letter-spacing: -.03em; }
+    .mark { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 11px; color: white; background: #276c63; }
+    h1 { margin: 0 0 6px; font-size: 30px; letter-spacing: -.045em; }
+    .subtitle { margin: 0; color: #71808b; font-size: 13px; }
+    .card { margin-top: 22px; padding: 8px 20px; border: 1px solid #e4e9e9; border-radius: 18px; background: #fff; }
+    .order { display: flex; justify-content: space-between; gap: 12px; padding: 14px 0; border-bottom: 1px solid #edf0f0; font-size: 13px; }
+    .order:last-child { border-bottom: 0; }
+    .back { display: inline-block; margin-top: 18px; padding: 11px 15px; border-radius: 10px; color: white; background: #276c63; font-size: 13px; font-weight: 700; text-decoration: none; }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <div class="brand"><span class="mark">N</span> Northstar Supply</div>
+    <h1>Receipt</h1>
+    <p class="subtitle">Orders placed in this browser session.</p>
+    <div id="orders" class="card" aria-live="polite"><div class="order"><span>Loading…</span></div></div>
+    <a class="back" href="/">Back to checkout</a>
+  </main>
+  <script>
+    const money = (cents) => 'RM ' + (cents / 100).toFixed(2);
+    fetch('/api/orders', { headers: { authorization: 'Bearer demo-agent-token' } })
+      .then((response) => response.json())
+      .then(({ orders }) => {
+        document.querySelector('#orders').innerHTML = orders.length
+          ? orders
+              .map(
+                (order) =>
+                  '<div class="order"><span>' +
+                  new Date(order.createdAt).toLocaleTimeString() +
+                  '</span><strong>' +
+                  money(order.totalCents) +
+                  '</strong></div>',
+              )
+              .join('')
+          : '<div class="order"><span>No orders yet.</span></div>';
+      })
+      .catch(() => {
+        document.querySelector('#orders').innerHTML =
+          '<div class="order"><span>Could not load orders.</span></div>';
+      });
   </script>
 </body>
 </html>`;
@@ -437,6 +492,12 @@ const server = createServer(async (request, response) => {
       ).run('demo');
       const counter = db.prepare('SELECT value FROM counters WHERE name = ?').get('demo');
       return sendJson(response, 200, { name: 'demo', value: counter.value });
+    }
+
+    if (request.method === 'GET' && url.pathname === '/receipt') {
+      response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      response.end(receiptPage);
+      return;
     }
 
     response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
